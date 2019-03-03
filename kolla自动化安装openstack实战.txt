@@ -1,0 +1,200 @@
+15.3.1 系统部署环境准备
+Kolla 支持在物理和虚拟机上部署，本节以 VMware Workst来演示 Kolla 的部署过程，演示所使用的相关系统和软件版本参考操作系统：操作系统为 CentOS Linux release 7 .2.1511( Corel7.x86 64 ，操作系统采用最小安装
+Docker: Docker 版本为 Docker version 1.12.5, build 047D 
+Ansible: Ansible 版本为 ansible 2.2.1.0
+Kolla: Ko Ila 版本为 Kolla4.0.0 ，即 Open Stack Ocata D 
+Kolla-ansible: Kolla-ansible 版本也为 kolla-ansible4.0.0
+在正式部署 KoIla 之前，需要对系统环境进行前期准备，例墙，设置时钟同步等，在准备工作完成后，即可安装相应的软以下步骤
+安装依赖软件包，此处注意一定要使用 EPEL 源，如下：
+
+# yum install epel-release python-pip 
+# yum install -y git python-devel libffi-devel openssl-devel gee 
+# pip install -u pip 
+# pip install tox
+
+安装Docker Python库，如下：
+
+# yum install python-docker-py 
+# 
+
+安装 Dokcer, Kolla 社区建议安装 Doke er 官方发行的 Docker 软件包，以实现最大化的
+稳定性和兼容性， Koll 社区推荐的安装方式如下：
+
+# curl -sSL https://get.docker.io | bash
+
+在国内按上述安装命令可能会很慢从而设置失败，因此用户也可以通过设置yum源来
+安装 Docker ，如下：
+tee /etc/yum.repos.d/docker.repo << 'EOF'
+[dockerrepo] 
+name~Docker Repository 
+baseurl=https://yum.dockerproject.org/repo/main/centos/$releasever/
+enabled＝1
+gpgcheck=l 
+gpgkey=https://yum.dockerproject.org/gpg
+EOF 
+
+Docker当前最新版本为 Dockerl.13,Kolla目前支持 Dockerl.12,因此Docker
+需要指定版本安装，如下
+
+# yum install docker-engine-1.12.5 docker-engine selinux-1.12.5 
+
+配置Docker的进程文件，并添加"MountFlags=shared"启动参数，如下：
+
+# mkdir /etc/systemd/system/docker.service.d 
+# tee /etc/systemd/system/docker.service.d/kolla.conf < 'EOF'
+[Service] 
+MountFlags=shared 
+EOF 
+
+修改了 Docker 的启动配置文件后，需要重新加载进程并重新启动 Docker ，同时设置
+Docker 为开机自动启动，如下：
+
+# systemctl daemon-reload 
+# systemctl enable docker 
+#　systemctl restart docker 
+
+如果需要访问私有 Registry ，则需要对私有 Registry 的访问进行设置，如下：
+
+# echo "INSECURE_REGISTRY='--insecure-registry 192.168.125.10:4000'"">\
+/etc/sysconfig/docker 
+
+重启 Docker 进程，如下：
+# systemctl daemon-reload 
+# systemctl restart docker 
+
+安装 Ansible, Kolla3.0 以后支持 ansible2.0 以上的版本，因此可以通过 yum 直接安装最新的 Ansible 可用版本，如下：
+# yum -y install ansible 
+
+创建私有镜像仓库，此处注意 Docker 官方 Registry 镜像默认使用 Docker 主机的5000端口，而在 OpenStack 部署中， Keystone 默认会占用此端口，因此在指定Registry的端口时，务必为其指定 OpenStack 服务不会占用的端口，这里为其指定 4000 端口，如下：
+# mkdir -p /data/registry 
+# docker run -d -v /data/registry:/var/lib/registry -p 4000:5000 --restart=always --name local_registry registry:2 
+
+此外，为了使用 OpenStack和Neutron的命令行客户端，需要为其安装 Python 客户端，
+如下：
+# yum install openstackpython neutronpython 
+或者
+# pip install openstackpython neutronpython 
+
+如果在系统安装过程中默认安装了 Libvirt 及其相关的包，则需要禁止 Systemd 启动并
+管理 libvirtd 服务，如下：
+# systemctl stop libvirtd.service 
+# systemctl disable libvirtd.service 
+
+允许 1Pv4 转发功能，因为 KoIla 在编译镜像时 Docker 容器需要访问外部网络，Centos最小安装情况下 1Pv4 转发功能默认未开启，这会导致 Docker 容器不能访问外部网络，允许1Pv4 转发的设置如下：
+# echo "net.ipv4.ip_forward=l" > /etc/sysctl.conf
+# sysctl -p 
+至此，Koll 的安装部署环境基本准备完成，后面将继续介绍如何安装 Kolla 以及如何通过 Koll 编译 Docker 镜像
+
+15.3.2 制作Docker镜像
+将 Kolla社区编译好的Docker镜像下载并放入私有 Registry
+# wget http://tarballs.openstack.org/kolla/images\ 
+/centos-binary-registry-master.tar.gz
+# tar zxvf centos-source-registry-ocata.tar.gz -C / data/registry/ 
+
+安装 Kolla,Kolla最新版本（ stable/ocata ）源代码安装方式如下：
+# git clone -b stable/ocata https://git.openstack.org/openstack/kolla 
+# pip install r kolla/requirements.txt -r kolla test-requ rements.txt
+# pip install kolla/
+
+之后，生成 KoIla 的配置文件 kolla-build.conf时，并将其拷贝至系统/etc 中，如下：
+# pip install -U tox
+# cd kolla/ 
+# tox -e genconfig
+# cp -rv etc/kolla /etc/ 
+
+现在，可以直接编译 Docker 镜像，如下：
+# kolla-build
+[root@kolla -]#docker images | grep -v none 
+
+15.3.3 部署Docker容器
+要是用 Kolla-ansible 部署 Docker 容器镜像，首先需要安装 Kolla-ansible ，此处以源代
+码形式安装 Ocata 版本中的 Kolla-ansible ，如下：
+# git clone -b stable/ocata https://github.com/openstack/kolla-ansible
+# pip install kolla-ansible/ 
+
+安装完成之后，将 etc/kolla 目录中的 passwords.yml和globals.yml 拷贝至系统／etc/kolla
+中，并将 Ansible的invent。可文件拷贝至当前部署目录，如下：
+# cp -r kolla-ansible/etc/kolla/* /etc/kolla 
+# cp -r kolla-ansible/ansible ／工 nventory/* .
+
+通过 kolla-genpwd 命令为 passwords.yml 生成密码字段，如下：
+# kolla-genpwd 
+
+为了便于登录管理，修改admin 用户的密码口令，如下：
+[root@kolla ~]# vi /etc/kolla/password.yml
+keystone_admin_password: admin
+
+修改部署配置文件global.yml,如下：
+[root@kolla ~］＃ vi /etc/kolla/globals.yml 
+openstack_release: "4.0.0"
+kolla_internal_vip_address: "192.168.125.10"
+network interface: "eno50332184"
+neutron external interface: "eno16777736"
+
+# kolla-ansible prechecks -i /root/all-in-one
+
+使用 kolla-ansible 命令进行一键部署，如下： 
+kolla-ansible deploy -i /root/all-in-one 
+[root@kolla -]# docker ps 
+
+部署完成且 penStack 服务容器启动之后，所有启动的 Open Stack 及其 础组件服务
+的配置文件均在／etc/kolla 目录下，如下所示：
+[root@kolla -l# cd /etc/kolla 
+[root@kolla kolla]# ls -1 
+
+如果用户需要更改对应服务的配置，则只需到／etc/kolla 目录中找到对应的项目子目
+录并修改配置文件即可，例如因为本节中 penStack 部署在虚拟机上，如果虚拟机不支持
+KVM 虚拟化，则需要修改虚拟类型为 qemu ，如下：
+# vim /etc/kolla/nova-compute/nova.conf 
+[libvirt] 
+virt_type=qemu 
+
+15.3.4 OpenStack 功能验证
+Kolla-ansible 除了能够通过 Docker 容器形式部署 OpenStack ，还提供了 一些命令行
+工具来帮助用户使用和管理 OpenStack 集群，例如用户可以通过 post-deploy 令来生成
+openrc 文件，生成的 openrc 文件默认存储在／etc/kolla 目录中，如下：
+[root@kolla ~]# kolla-ansible post-deploy 
+[root@kolla ~］＃more /etc/kolla/admin-openrc.sh 
+export OS_PROJECT_DOMAIN_NAME=default 
+export OS_USER DOMAIN_NAME=default
+exp rt OS_PROJECT_NAME=admin 
+export OS_TENANT_NAME=admin 
+export OS_ USERNAME=admin 
+export OS_PASSWORD=admin 
+export OS_AUTH_URL=http://192.168.125.100:35357/v3 
+export OS IDENTITY_API_VERSI0N=3
+
+此外， KoIla 1sible 在源代码的 kolla-ansible/tools 目录中还提供了一个名为 init-runonce
+sh 脚本来帮助用户初始化 Open Stack 集群，其功能包括下载 cirros 镜像井上传至 Glance,
+以及创建几个租户网络并设置 Nova的quota ，用户需要根据自己的网络环境对 kolla-ansible/
+tools/init-runonce 进行修改，通常建议将此脚本拷贝到当前部署目录再修改，如下：
+
+[root@kolla -]#cpkolla-ansible/tools/init-runonce .
+[root@kolla -]#viinit- runonce 
+... ...
+#IMAGE_URL=http://download.cirros-cloud.net/0.3.4/ 
+IMAGE_URL=http://images.trystack.cn/0.3.4/ 
+IMAGE=cirros-0.3.4-x86_64-disk.img 
+IMAGE_NAME=cirros 
+EXT_NET_CIDR='10.20.30 0/24' 
+EXT_NET_RANGE='start=lO 20 30 100,end=l0.20.30.200' 
+EXT_NET_GATEWAY='10.20.30.2'
+
+上述修改中，将 Cirros 镜像的下载地址改为国内九州云的镜像下载地址，这样下载过
+程会非常快 此外，外部网络“ EXT NET CIDR=l0.20.30.0/24 ”为实验环境中可以访问
+外网的网络，此处需要根据用户各自的网络环境进行设置，而“ EXT NET GATEWAY= 
+10.20.30.2 ”为实验环境中的外网网关，该参数也需要根据实际网络情况进行设置 设置完
+成之后，即可运行该脚本初始化 Open Stack ，如下：
+
+[root®kolla ”]#source /etc/kolla/admin-openrc.sh 
+[root®kolla -l#chmod 755 init- runonce 
+[root®kolla -l#bashinit-runonce  
+
+
+
+
+
+
+
+
+
