@@ -1,0 +1,965 @@
+                                              openstack后端存储
+ 
+配置NFS存储后端
+ 1:以root身份登录到托管cinder卷服务的系统。
+ 2:在/etc/cinder/目录中创建名为nfsshares的文本文件
+ 3:为cinder卷服务应用于后端存储的每个NFS共享添加一个条目到/etc/cinder/nfsshares。每个条目应该是一个单独的行，并应使用以下格式：
+  HOST:SHARE
+  HOST是NFS服务器的IP地址或主机名。
+  SHARE是现有和可访问的NFS共享的绝对路径。
+
+ 4:将/etc/cinder/nfsshares设置为root用户和cinder组所有：
+  # chown root:cinder /etc/cinder/nfsshares
+ 5:将/etc/cinder/nfsshares设置为cinder组的成员可读： 
+  # chmod 0640 /etc/cinder/nfsshares
+ 6:配置cinder卷服务以使用先前创建的/etc/cinder/nfsshares文件。为此，请打开/etc/cinder/ cinder.conf配置文件，并将nfs_shares_config配置键设置为/etc/cinder/nfsshares。
+  # openstack-config --set /etc/cinder/cinder.conf DEFAULT nfs_shares_config /etc/cinder/nfsshares
+ 7:（可选）在/etc/cinder/cinder.conf的nfs_mount_options配置键中提供环境中所需的任何其他NFS装入选项。如果您的NFS共享不需要任何其他安装选项 （或者您不确定），请跳过此步骤。
+  在包含openstack-config的发行版上，您可以通过运行以下命令来配置：
+  # openstack-config --set /etc/cinder/cinder.conf DEFAULT nfs_mount_options OPTIONS
+ 将OPTIONS替换为访问NFS共享时要使用的挂载选项。有关可用挂载选项（man nfs）的更多信息，请参见NFS的手册页。
+ 8:配置cinder卷服务以使用正确的卷驱动程序，即cinder.volume.drivers.nfs.NfsDriver。为此，请打开/etc/cinder/cinder.conf配置文件，并将volume_driver配置键设置为cinder.volume.drivers.nfs.NfsDriver。
+ 在包含openstack-config的发行版上，您可以通过运行以下命令来配置：
+ ＃ openstack-config --set /etc/cinder/cinder.conf DEFAULT volume_driver cinder.volume.drivers.nfs.NfsDrive 
+ 您现在可以重新启动服务以应用配置。
+ 注意
+ 所述nfs_sparsed_volumes配置密钥确定是否卷作为稀疏文件创建并生长根据需要或完全分配了前面。默认值和建议值为true，这可确保最初将卷创建为稀疏文件。将nfs_sparsed_volumes设置为false将导致在创建时完全分配卷。这导致了卷创建的延迟增加。
+ 但是，如果您选择将nfs_sparsed_volumes设置为 false，则可以直接在/etc/cinder/cinder.conf中执行此操作。 
+ 在包含openstack-config的发行版上，您可以通过运行以下命令来配置：
+ # openstack-config --set /etc/cinder/cinder.conf DEFAULT nfs_sparsed_volumes false
+ 警告
+ 如果客户端主机启用了SELinux，则 如果主机需要访问实例上的NFS卷，则还应启用virt_use_nfs布尔值。要启用此布尔值，请以root用户身份运行以下命令：
+ ＃ setsebool -P virt_use_nfs上
+ 此命令还使布尔值在重新引导后保持不变。在需要访问实例上的NFS卷的所有客户端主机上运行此命令。这包括所有计算节点。
+ 
+ 配置过程:
+ 1.1 配置nfs服务器
+ [root@centos65-01 ~]# yum install -y nfs-utils rpcbind
+ [root@centos65-01 ~]# vi /etc/exports 
+ /data  *(rw,sync,no_root_squash,no_all_squash)
+ [root@centos65-01 ~]# exportfs -a
+ [root@centos65-01 ~]# exportfs
+ /data           <world>
+
+ 1.2 在存储节点上准备NFS服务器的导出目录文本文件，文件中可以包含多个NFS服务器及其导出目录。  
+ [root@linux-node2 ~]# touch /etc/cinder/nfsshares
+ [root@linux-node2 ~]# echo "192.168.100.153:/data" >/etc/cinder/nfsshares
+ [root@linux-node2 ~]# chown root:cinder /etc/cinder/nfsshares 
+ [root@linux-node2 ~]# chmod 0640 /etc/cinder/nfsshares 
+ [root@linux-node2 ~]# more /etc/cinder/nfsshares
+ [root@linux-node2 ~]# showmount -e 192.168.100.153
+ Export list for 192.168.100.153:
+ /data *
+
+ 1.3 创建NFS客户端挂载点（也可以使用默认的$state_path/mnt）
+ [root@linux-node2 ~]# mkdir -p /var/lib/cinder/nfs/
+ [root@linux-node2 ~]# ls -1 /var/lib/cinder/nfs/ 
+ [root@linux-node2 ~]# chown -R cinder:cinder /var/lib/cinder/nfs
+
+1.4 配置／etc/cinder/cinder.conf文件
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf 
+[DEFAULT]
+enabled_backends = nfs
+auth_strategy = keystone
+glance_api_servers = http://192.168.100.151:9292
+transport_url = rabbit://openstack:openstack@192.168.100.151
+[backend]
+[backend_defaults]
+[barbican]
+[brcd_fabric_example]
+[cisco_fabric_example]
+[coordination]
+[cors]
+[database]
+connection = mysql+pymysql://cinder:cinder@192.168.100.151/cinder
+[fc-zone-manager]
+[healthcheck]
+[key_manager]
+[keystone_authtoken]
+auth_uri = http://192.168.100.151:5000
+auth_url = http://192.168.100.151:35357
+memcached_servers = 192.168.100.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = cinder
+password = cinder
+[matchmaker_redis]
+[nova]
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+[oslo_messaging_amqp]
+[oslo_messaging_kafka]
+[oslo_messaging_notifications]
+[oslo_messaging_rabbit]
+[oslo_messaging_zmq]
+[oslo_middleware]
+[oslo_policy]
+[oslo_reports]
+[oslo_versionedobjects]
+[profiler]
+[service_user]
+[ssl]
+[vault]
+[lvm]
+[nfs] 
+volume_driver = cinder.volume.drivers.nfs.NfsDriver 
+nfs_shares_config = /etc/cinder/nfsshares 
+nfs_mount_point_base = /var/lib/cinder/nfs 
+volume_backend_name = nfs
+
+[root@linux-node2 ~]# systemctl restart openstack-cinder-volume.service
+[root@linux-node2 ~]# systemctl status openstack-cinder-volume.service
+
+1.5 重启cinder-volume服务，并检查Cinder服务运行情况。
+[root@linux-node1 ~]# source admin-openstack.sh 
+[root@linux-node1 ~]# cinder service-list
++------------------+-----------------+------+---------+-------+----------------------------+-----------------+
+| Binary           | Host            | Zone | Status  | State | Updated_at                 | Disabled Reason |
++------------------+-----------------+------+---------+-------+----------------------------+-----------------+
+| cinder-scheduler | linux-node1     | nova | enabled | up    | 2018-08-11T01:51:49.000000 | -               |
+| cinder-volume    | linux-node2@lvm | nova | enabled | down  | 2018-08-11T01:49:38.000000 | -               |
+| cinder-volume    | linux-node2@nfs | nova | enabled | up    | 2018-08-11T01:51:48.000000 | -               |
++------------------+-----------------+------+---------+-------+----------------------------+-----------------+
+
+1.6 检查存储节点上的本地挂载点是否出现新的目录。 正常情况下，Cinder-volume为每个NFS共享目录在挂载点中创建一个新的目录，目录名称为HASH值。
+[root@linux-node2 ~]# cd /var/lib/cinder/nfs
+[root@linux-node2 nfs]# ls -l
+total 4
+drwxr-xr-x 2 root root 4096 Aug 11 09:30 941ab880e749b50d468b65e82c0c1841
+
+1.7 将nfs-volume1挂载到host实例上(可在openstack的管理界面上配置完成)
+[root@linux-node1 ~]# cinder list
++--------------------------------------+--------+----------+------+-------------+----------+--------------------------------------+
+| ID                                   | Status | Name     | Size | Volume Type | Bootable | Attached to                          |
++--------------------------------------+--------+----------+------+-------------+----------+--------------------------------------+
+| 63a153f5-3acf-4a4f-a89f-ce0f1725515d | in-use | volume-1 | 2    | -           | false    | 72e19117-16d6-496d-b892-0088d7f58ab3 |
++--------------------------------------+--------+----------+------+-------------+----------+--------------------------------------+
+
+1.8 在host实例上使用挂载的块存储：
+$ sudo fdisk -l
+$ sudo mkfs -t ext4 /dev/vdb 
+$ sudo blkid /dev/vdb
+$ mkdir /data
+$ sudo mount -t ext4 /dev/vdb /data
+$ df -h
+# dd if=/dev/zero of=/mount/test.txt bs=1M count=100
+dd: can't open '/mount/test.txt': No such file or directory
+# dd if=/dev/zero of=/data/test.txt bs=1M count=100
+100+0 records in
+100+0 records out
+# du -ms  /data/test.txt
+100     /data/test.txt
+
+1.9 检查存储节点挂载点和NFS服务器共享目录有何变化：
+[root@linux-node2 nfs]#  cd /var/lib/cinder/nfs
+[root@linux-node2 nfs]# ls 
+941ab880e749b50d468b65e82c0c1841
+[root@linux-node2 nfs]# cd 941ab880e749b50d468b65e82c0c1841/
+[root@linux-node2 941ab880e749b50d468b65e82c0c1841]# ls 
+volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d
+[root@linux-node2 941ab880e749b50d468b65e82c0c1841]# du -ms volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d 
+197     volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d 
+[root@centos65-01 data]# ls -1 /data
+volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d
+[root@centos65-01 data]# du -ms volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d 
+197     volume-63a153f5-3acf-4a4f-a89f-ce0f1725515d
+
+
+2.1 后端多存储设备并存(LVM,NFS)
+2.1.1 修改配置文件/etc/cinder/cinder.conf如下: 
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf 
+[DEFAULT]
+enabled_backends = lvm,nfs
+auth_strategy = keystone
+glance_api_servers = http://192.168.100.151:9292
+transport_url = rabbit://openstack:openstack@192.168.100.151
+[database]
+connection = mysql+pymysql://cinder:cinder@192.168.100.151/cinder
+[keystone_authtoken]
+auth_uri = http://192.168.100.151:5000
+auth_url = http://192.168.100.151:35357
+memcached_servers = 192.168.100.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = cinder
+password = cinder
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+[lvm]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_group = cinder-volumes
+iscsi_protocol = iscsi
+iscsi_helper = lioadm
+volume_backend_name = lvm
+[nfs] 
+volume_driver = cinder.volume.drivers.nfs.NfsDriver 
+nfs_shares_config = /etc/cinder/nfsshares 
+nfs_mount_point_base = /var/lib/cinder/nfs 
+volume_backend_name = nfs
+
+[root@linux-node2 ~]# systemctl restart openstack-cinder-volume.service
+
+2.1.2 在控制节点上为每个存储后端创建对应的存储类型（Storage Type），在多后端场景中进行Volume操作时，需要通过指定存储类型来使用特定的存储后端：
+
+#为LVM后端创建类型lvm
+[root@linux-node1 ~]# cinder type-create lvm
++--------------------------------------+------+-------------+-----------+
+| ID                                   | Name | Description | Is_Public |
++--------------------------------------+------+-------------+-----------+
+| 652df0a0-2087-473b-95d9-c3c1a6020415 | lvm  | -           | True      |
++--------------------------------------+------+-------------+-----------+
+
+#为NFS后端创建类型nfs
+[root@linux-node1 ~]# cinder type-create nfs
++--------------------------------------+------+-------------+-----------+
+| ID                                   | Name | Description | Is_Public |
++--------------------------------------+------+-------------+-----------+
+| dbcdb78b-af96-47ef-8660-b1187c2e226b | nfs  | -           | True      |
++--------------------------------------+------+-------------+-----------+
+
+#将类型lvm绑定到名称为lvm的后端
+[root@linux-node1 ~]# cinder type-key lvm set volume_backend_name=lvm
+
+#将类型nfs绑定到名称为nfs的后端
+[root@linux-node1 ~]# cinder type-key nfs set volume_backend_name=nfs
+
+[root@linux-node1 ~]# cinder extra-specs-list
++--------------------------------------+------+--------------------------------+
+| ID                                   | Name | extra_specs                    |
++--------------------------------------+------+--------------------------------+
+| 652df0a0-2087-473b-95d9-c3c1a6020415 | lvm  | {'volume_backend_name': 'lvm'} |
+| dbcdb78b-af96-47ef-8660-b1187c2e226b | nfs  | {'volume_backend_name': 'nfs'} |
++--------------------------------------+------+--------------------------------+
+
+# 在lvm存储后端创建大小为2GB，名称为lvm-volumel的Volume
+[root@linux-node1 ~]# cinder create --volume-type lvm --name lvm-volumel 2
++--------------------------------+--------------------------------------+
+| Property                       | Value                                |
++--------------------------------+--------------------------------------+
+| attachments                    | []                                   |
+| availability_zone              | nova                                 |
+| bootable                       | false                                |
+| consistencygroup_id            | None                                 |
+| created_at                     | 2018-08-11T07:25:35.000000           |
+| description                    | None                                 |
+| encrypted                      | False                                |
+| id                             | af0d3c95-5cb4-4c79-893d-a2c5130900e1 |
+| metadata                       | {}                                   |
+| migration_status               | None                                 |
+| multiattach                    | False                                |
+| name                           | lvm-volumel                          |
+| os-vol-host-attr:host          | None                                 |
+| os-vol-mig-status-attr:migstat | None                                 |
+| os-vol-mig-status-attr:name_id | None                                 |
+| os-vol-tenant-attr:tenant_id   | 71abd209193a4959a03afaf93165c6b3     |
+| replication_status             | None                                 |
+| size                           | 2                                    |
+| snapshot_id                    | None                                 |
+| source_volid                   | None                                 |
+| status                         | creating                             |
+| updated_at                     | 2018-08-11T07:25:35.000000           |
+| user_id                        | 963d8d9c790549f49d468982dc76504f     |
+| volume_type                    | lvm                                  |
++--------------------------------+--------------------------------------+
+
+# 在nfs存储后端创建大小为2GB，名称为nfs-volumel的Volume
+[root@linux-node1 ~]# cinder create --volume-type nfs --name nfs-volumel 2
++--------------------------------+--------------------------------------+
+| Property                       | Value                                |
++--------------------------------+--------------------------------------+
+| attachments                    | []                                   |
+| availability_zone              | nova                                 |
+| bootable                       | false                                |
+| consistencygroup_id            | None                                 |
+| created_at                     | 2018-08-11T07:27:27.000000           |
+| description                    | None                                 |
+| encrypted                      | False                                |
+| id                             | 47409840-6716-470e-9fb3-52015e08f3f3 |
+| metadata                       | {}                                   |
+| migration_status               | None                                 |
+| multiattach                    | False                                |
+| name                           | nfs-volumel                          |
+| os-vol-host-attr:host          | None                                 |
+| os-vol-mig-status-attr:migstat | None                                 |
+| os-vol-mig-status-attr:name_id | None                                 |
+| os-vol-tenant-attr:tenant_id   | 71abd209193a4959a03afaf93165c6b3     |
+| replication_status             | None                                 |
+| size                           | 2                                    |
+| snapshot_id                    | None                                 |
+| source_volid                   | None                                 |
+| status                         | creating                             |
+| updated_at                     | 2018-08-11T07:27:27.000000           |
+| user_id                        | 963d8d9c790549f49d468982dc76504f     |
+| volume_type                    | nfs                                  |
++--------------------------------+--------------------------------------+
+
+
+[root@linux-node1 ~]# cinder list
++--------------------------------------+-----------+-------------+------+-------------+----------+-------------+
+| ID                                   | Status    | Name        | Size | Volume Type | Bootable | Attached to |
++--------------------------------------+-----------+-------------+------+-------------+----------+-------------+
+| 47409840-6716-470e-9fb3-52015e08f3f3 | available | nfs-volumel | 2    | nfs         | false    |             |
+| af0d3c95-5cb4-4c79-893d-a2c5130900e1 | available | lvm-volumel | 2    | lvm         | false    |             |
++--------------------------------------+-----------+-------------+------+-------------+----------+-------------+
+
+后端存储glusterfs的配置
+1 glusterfs的安装和配置
+1.1 glusterfs的安装（二台服务器都要安装，并启动glusterfs服务）
+[root@glusterfs1 ~]# yum search centos-release-gluster
+Loaded plugins: fastestmirror
+Loading mirror speeds from cached hostfile
+ * base: mirrors.aliyun.com
+ * extras: mirrors.163.com
+ * updates: mirrors.aliyun.com
+============================================ N/S Matched: centos-release-gluster ============================================
+centos-release-gluster312.noarch : Gluster 3.12 (Long Term Stable) packages from the CentOS Storage SIG repository
+centos-release-gluster41.x86_64 : Gluster 4.1 (Long Term Stable) packages from the CentOS Storage SIG repository
+[root@glusterfs1 ~]# yum install centos-release-gluster312.noarch
+[root@glusterfs1 ~]# yum --enablerepo=centos-gluster*-test install glusterfs-server glusterfs-cli glusterfs-geo-replication
+[root@glusterfs1 ~]# /etc/init.d/glusterd start
+Starting glusterd:[  OK  ]
+[root@glusterfs1 ~]# /etc/init.d/glusterd status
+glusterd (pid  2086) is running...
+
+[root@glusterfs2 ~]# mkfs.ext4 /dev/sdb
+[root@glusterfs1 ~]# echo "/dev/sdb     /data ext4   defaults   0 0" >>/etc/fstab
+[root@glusterfs1 ~]# mkdir /data
+[root@glusterfs1 ~]# mount /dev/sdb /data
+[root@glusterfs1 ~]# mount
+
+[root@glusterfs2 ~]# yum search  centos-release-gluster
+Loaded plugins: fastestmirror
+Loading mirror speeds from cached hostfile
+ * base: mirrors.aliyun.com
+ * extras: mirrors.163.com
+ * updates: mirrors.aliyun.com
+============================================ N/S Matched: centos-release-gluster ============================================
+centos-release-gluster312.noarch : Gluster 3.12 (Long Term Stable) packages from the CentOS Storage SIG repository
+centos-release-gluster41.x86_64 : Gluster 4.1 (Long Term Stable) packages from the CentOS Storage SIG repository
+[root@glusterfs2 ~]# yum install centos-release-gluster312.noarch
+[root@glusterfs2 ~]# yum --enablerepo=centos-gluster*-test install glusterfs-server glusterfs-cli glusterfs-geo-replication
+[root@glusterfs2 ~]# /etc/init.d/glusterd start
+Starting glusterd:[  OK  ]
+[root@glusterfs2 ~]# /etc/init.d/glusterd status
+glusterd (pid  2086) is running...
+
+[root@glusterfs2 ~]# mkfs.ext4 /dev/sdb
+[root@glusterfs2 ~]# echo "/dev/sdb     /data ext4   defaults   0 0" >>/etc/fstab
+[root@glusterfs2 ~]# mkdir /data
+[root@glusterfs2 ~]# mount /dev/sdb /data
+[root@glusterfs2 ~]# mount
+
+
+1.2 glusterfs的配置（在其中一台服务器上执行如下命令)`
+[root@glusterfs1 ~]# gluster peer probe glusterfs2
+peer probe: success.  
+[root@glusterfs1 ~]# gluster peer status
+Number of Peers: 2
+
+Hostname: glusterfs2
+Uuid: 3750bcb0-5dc2-41c9-ab65-08c26c38be36
+State: Peer in Cluster (Connected)
+
+[root@glusterfs1 ~]# gluster volume create gv1 replica 2 glusterfs1:/data/ glusterfs2:/data force
+volume create: gv1: success: please start the volume to access data
+[root@glusterfs1 ~]# gluster peer status
+Number of Peers: 1
+
+Hostname: glusterfs2
+Uuid: 5a67275e-0b9a-4842-9422-db88cbef22f5
+State: Peer in Cluster (Connected)
+[root@glusterfs1 ~]# gluster volume info
+ 
+Volume Name: gv1
+Type: Replicate
+Volume ID: d24f307e-7019-4e02-96d0-082939fdabaf
+Status: Created
+Snapshot Count: 0
+Number of Bricks: 1 x 2 = 2
+Transport-type: tcp
+Bricks:
+Brick1: glusterfs1:/data
+Brick2: glusterfs2:/data
+Options Reconfigured:
+transport.address-family: inet
+nfs.disable: on
+performance.client-io-threads: off
+[root@glusterfs1 ~]# gluster volume start gv1
+volume start: gv1: success
+[root@glusterfs1 ~]# gluster volume info
+ 
+Volume Name: gv1
+Type: Replicate
+Volume ID: d24f307e-7019-4e02-96d0-082939fdabaf
+Status: Started
+Snapshot Count: 0
+Number of Bricks: 1 x 2 = 2
+Transport-type: tcp
+Bricks:
+Brick1: glusterfs1:/data
+Brick2: glusterfs2:/data
+Options Reconfigured:
+transport.address-family: inet
+nfs.disable: on
+performance.client-io-threads: off
+
+测试效果
+[root@glusterfs1 ~]# mount -t glusterfs 192.168.100.121:/gv1 /mnt/
+[root@glusterfs1 mnt]# touch 1.txt
+[root@glusterfs1 mnt]# ls -l
+total 5
+-rw-r--r--. 1 root root    0 Aug 12 19:32 1.txt
+-rw-r--r--. 1 root root    7 Aug 12 19:35 2.txt
+drwx------. 2 root root 4096 Aug 12 19:13 lost+found
+
+[root@glusterfs2 ~]# mount -t glusterfs 192.168.100.120:/gv1 /mnt/
+[root@glusterfs2 ~]# cd /mnt
+[root@glusterfs2 mnt]# ls  -l
+total 4
+-rw-r--r--. 1 root root    0 Aug 12  2018 1.txt
+drwx------. 2 root root 4096 Aug 12  2018 lost+found
+[root@glusterfs2 mnt]# touch 2.txt
+[root@glusterfs2 mnt]# echo wpaccp > 2.txt
+[root@glusterfs2 mnt]# ls
+1.txt  2.txt  lost+found
+
+配置glusterfs与openstack cinder融合
+[root@linux-node2 ~]# mkdir /etc/cinder/shares.conf
+[root@linux-node2 ~]# vi /etc/cinder/shares.conf
+192.168.100.120:/gv1 
+[root@linux-node2 ~]# chown -R cinder:cinder /etc/cinder/shares.conf 
+[root@linux-node2 ~]# mkdir -p /var/lib/cinder/volumes/
+[root@linux-node2 volumes]# chown -R cinder:cinder /var/lib/cinder/volumes/
+
+#创建一个卷类型
+[root@linux-node1 ~]# cinder type-create glusterfs
++--------------------------------------+-----------+-------------+-----------+
+| ID                                   | Name      | Description | Is_Public |
++--------------------------------------+-----------+-------------+-----------+
+| 9e9f25cd-395d-49c3-8b58-2dfc4851f43e | glusterfs | -           | True      |
++--------------------------------------+-----------+-------------+-----------+
+[root@linux-node1 ~]# cinder type-key glusterfs set volume_backend_name=glusterfs
+
+#查看卷类型信息
+[root@linux-node1 ~]# cinder extra-specs-list
++--------------------------------------+-----------+--------------------------------------+
+| ID                                   | Name      | extra_specs                          |
++--------------------------------------+-----------+--------------------------------------+
+| 9e9f25cd-395d-49c3-8b58-2dfc4851f43e | glusterfs | {'volume_backend_name': 'glusterfs'} |
++--------------------------------------+-----------+--------------------------------------+
+
+[root@linux-node1 ~]# systemctl restart openstack-cinder-scheduler
+[root@linux-node1 ~]# systemctl restart openstack-cinder-api
+[root@linux-node1 ~]# systemctl status openstack-cinder-api
+
+1）检查rbd这个pool里已存在的PG和PGP数量：
+# ceph osd pool get rbd pg_num
+pg_num: 128
+$ ceph osd pool get rbd pgp_num
+pgp_num: 128
+2）检查pool的复制size，执行如下命令：
+$ ceph osd dump |grep size|grep rbd
+pool 2 'rbd' replicated size 3 min_size 2 crush_ruleset 0 object_hash rjenkins pg_num 128 pgp_num 128 last_change 45 flags hashpspool stripe_width 0
+3）使用上述公式，根据OSD数量、复制size、pool的数量，计算出新的PG数量，假设是256.
+4）变更rbd的pg_num和pgp_num为256：
+$ ceph osd pool set rbd pg_num 256
+$ ceph osd pool set rbd pgp_num 256
+5）如果有其他pool，同步调整它们的pg_num和pgp_num，以使负载更加均衡。
+
+
+配置ceph与openstack的融合
+1:为客户端创建Pool
+#Nova的pool
+[ceph@linux-node1 my-cluster]$ ceph osd pool create volumes 128
+#cinder的pool
+[ceph@linux-node1 my-cluster]$ ceph osd pool create vms 128
+#glance的pool
+[ceph@linux-node1 my-cluster]$ ceph osd pool create images 128
+[ceph@linux-node1 my-cluster]$ ceph osd lspools
+2:检查配置文件。在本节的配置中，运行glance-api,cinder-volume和nova-compute,服务的节点为Ceph的客户端，配置之前请确认这些节点均存放在/etc/ceph/cepb.conf配置文件中。 如果节点上没有ceph.conf配置文件，可通过如下命令形式将Admin节点中的ceph.conf传递到缺失节点:
+[ceph@linux-node1 my-cluster]$ ceph-deploy admin linux-node1 linux-node2 linux-node3
+
+3:客户端软件包补充安装。在运行glance-api的节点上，请确保安装了python-rbd软件包。
+[ceph@linux-node1 my-cluster]$ sudo yum install python-rbd
+Loaded plugins: fastestmirror, priorities
+Loading mirror speeds from cached hostfile
+ * base: mirrors.aliyun.com
+ * extras: mirrors.aliyun.com
+ * updates: mirrors.aliyun.com
+7 packages excluded due to repository priority protections
+Package 2:python-rbd-12.2.7-0.el7.x86_64 already installed and latest version
+Nothing to do
+
+4:在运行cinder-volume和nova-compute的节点上，确保安装了ceph-common软件包。
+[ceph@linux-node2 ~]$ sudo yum install ceph-common
+Loaded plugins: fastestmirror, priorities
+Loading mirror speeds from cached hostfile
+ * base: mirrors.aliyun.com
+ * extras: mirrors.aliyun.com
+ * updates: mirrors.aliyun.com
+Package 2:ceph-common-12.2.7-0.el7.x86_64 already installed and latest version
+Nothing to do
+
+5:#创建client.cinder并设置权限
+[ceph@linux-node1 my-cluster]$ ceph auth get-or-create client.cinder mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool=volumes, allow rwx pool=vms, allow rx pool=images'
+[client.cinder]
+        key = AQCV5XdbIYz/DhAAwiaIXHzYMN2xs/lb542zjw==
+
+[ceph@linux-node1 my-cluster]$ ceph auth get-or-create client.glance mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool=images'
+[client.glance]
+        key = AQAJMnZbsVOQKhAAdye71hLRfWU2olDxvhNFMg==
+
+6:将上述命令为client.glance和client.cinder用户生成的密码发送到运行glance-api和cinder-volume的节点上，本例中glance运行在控制节点上，cinder-volume运行在存储节点上
+#将client. glance的秘钥传递到glance-api节点
+[ceph@linux-node1 my-cluster]$ ceph auth get-or-create client.glance | sudo tee /etc/ceph/ceph.client.glance.keyring
+[ceph@linux-node1 my-cluster]$ sudo chown glance:glance /etc/ceph/ceph.client.glance.keyring
+[ceph@linux-node1 my-cluster]$ ll /etc/ceph/ceph.client.glance.keyring
+-rw-r--r-- 1 glance glance 64 Aug 17 10:26 /etc/ceph/ceph.client.glance.keyring
+
+[ceph@linux-node1 my-cluster]$ ceph auth get-or-create client.cinder | sudo ssh linux-node2 sudo tee /etc/ceph/ceph.client.cinder.keyring
+root@linux-node2's password: 
+[client.cinder]
+        key = AQCmMXZb6Oj8LhAAqWJm8IL4Wiw0Jju7CuDywQ==
+[ceph@linux-node1 my-cluster]$ sudo ssh root@linux-node2 chown cinder:cinder /etc/ceph/ceph.client.cinder.keyring 
+root@linux-node2's password: 
+[ceph@linux-node1 my-cluster]$ sudo ssh root@linux-node2 ls -l /etc/ceph/ceph.client.cinder.keyring 
+root@linux-node2's password: 
+-rw-r--r-- 1 cinder cinder 64 Aug 17 10:30 /etc/ceph/ceph.client.cinder.keyring
+
+7:运行nova-compute服务的节点需要用到client.cinder的秘钥文件，并需将其传递到计算节点
+# 将client.cinder用户秘钥文件传递到computel
+[root@controllerl ~]# ceph auth get-or-create client.cinder | ssh linux-node2 tee /etc/ceph/ceph.client.cinder.keyring
+
+8:nova-compute节点需要将client.cinder用户的秘钥文件存储到libvirt 中，当基于Ceph
+后端的Cinder卷被attach到虚拟机实例时，libvirt需要用到该秘钥文件以访问Ceph集群。在运行nova-compute的节点上暂时创建秘钥临时文件：
+[root@controllerl ~]# ceph auth get-key client.cinder | ssh linux-node2 tee client.cinder.key
+
+# 在运行nova-compute的计算节点上将临时秘钥文件添加到libvirt 中，然后将其删除：
+# 先生成一个UUID，全部计算节点可以共同使用此UUID
+[ceph@linux-node2 ~]$ sudo uuidgen
+3e67ff66-0070-4d44-827e-e869057a7ce9
+# 添加秘钥到computel的libvirt中
+[root@linux-node2 ~]# cat> secret.xml << EOF
+<secret ephemeral＝'no' private＝'no'>
+<uuid>3e67ff66-0070-4d44-827e-e869057a7ce9</uuid> 
+<usage type='ceph'>
+<name>client.cinder secret</name> 
+</usage> 
+</secret> 
+EOF
+
+[root@linux-node2 ~]# virsh secret-define --file secret.xml
+Secret 3e67ff66-0070-4d44-827e-e869057a7ce9 created
+[root@linux-node2 ~]# virsh secret-set-value --secret 3e67ff66-0070-4d44-827e-e869057a7ce9 --base64 $(cat client.cinder.key) && rm -rf client.cinder.key secret.xml
+Secret value set
+
+这里的UUID在后续配置nova-compute服务时候还会用到，所以请保存好此UUID。到此，Ceph集群已经准备就绪，后面即可配置Nova、 Cinder和Glance客户端以访问Ceph集群。 
+
+Ceph集成Glance
+Juno以后的版本按如下方式配置。在Glance配置文件/etc/glance/glance.conf的[glance_store］配置段中添加如下配置参数：
+[DEFAULT]
+show_image_direct_url = True 
+[glance_store]
+stores = rbd 
+default_store = rbd 
+rbd_store_pool = images 
+rbd_store_user = glance 
+rbd_store_ceph_conf = /etc/ceph/ceph.conf 
+rbd_store_chunk_size = 8
+
+对于任何版本的OpenStack，如果想使用copy-on-write功能，则在［DEFAULT］配置段
+中添加如下配置行
+show_image_direct_url = True
+
+4)重启glance服务：
+[root@controllerl ~]# systemctl restart openstack-glance-api.service 
+[root@controllerl ~]# systemctl restart openstack-glance-registry.service
+
+5)上传镜像验证,下载测试镜像：
+[root@linux-node1 ~]# wget http://download.cirros-cloud.net/0.3.4/cirros-0.3.4-x86_64-disk.img
+
+6)上传镜像，此时默认应该上传到Ceph集群名称为images的Pool中：
+[root@linux-node1 ~]# source admin-openstack.sh 
+[root@linux-node1 ~]# glance image-create --name "cirros-on-ceph" --file /root/cirros-0.3.4-x86_64-disk.img --disk-format qcow2 --container-format bare --visibility public --progress
++------------------+----------------------------------------------------------------------------------+
+| Property         | Value                                                                            |
++------------------+----------------------------------------------------------------------------------+
+| checksum         | ee1eca47dc88f4879d8a229cc70a07c6                                                 |
+| container_format | bare                                                                             |
+| created_at       | 2018-08-17T06:49:19Z                                                             |
+| direct_url       | rbd://5496b323-10ad-                                                             |
+|                  | 419e-b336-3392ec196eb0/images/673230f7-5f7b-4628-8863-fed88e15035d/snap          |
+| disk_format      | qcow2                                                                            |
+| id               | 673230f7-5f7b-4628-8863-fed88e15035d                                             |
+| min_disk         | 0                                                                                |
+| min_ram          | 0                                                                                |
+| name             | cirros-on-ceph                                                                   |
+| owner            | 71abd209193a4959a03afaf93165c6b3                                                 |
+| protected        | False                                                                            |
+| size             | 13287936                                                                         |
+| status           | active                                                                           |
+| tags             | []                                                                               |
+| updated_at       | 2018-08-17T06:49:25Z                                                             |
+| virtual_size     | None                                                                             |
+| visibility       | public                                                                           |
++------------------+----------------------------------------------------------------------------------+
+7)检查Ceph存储集群中名称为images的Pool是否已经上传有镜像
+[root@linux-node1 ~]# rbd ls list -p images
+673230f7-5f7b-4628-8863-fed88e15035d
+
+[root@linux-node1 ~]# rbd ls images
+673230f7-5f7b-4628-8863-fed88e15035d
+
+Q版的配置
+ceph集成cinder
+[root@linux-node2 ~]# vi /etc/cinder/cinder.conf
+[backend_defaults]
+rbd_pool = volumes
+rbd_user = cinder
+rbd_ceph_conf = /etc/ceph/ceph.conf
+rbd_flatten_volume_from_snapshot = false
+rbd_secret_uuid = 3e67ff66-0070-4d44-827e-e869057a7ce9
+rbd_max_clone_depth = 5
+rbd_store_chunk_size = 4
+rados_connect_timeout = -1
+
+O版的配置
+[DEFAULT]
+enabled_backends = ceph
+... ....
+[ceph]
+volume_driver = cinder.volume.drivers.rbd.RBDDriver
+rbd_pool = volumes
+rbd_user = cinder
+rbd_ceph_conf = /etc/ceph/ceph.conf
+rbd_flatten_volume_from_snapshot = false
+rbd_secret_uuid = d071375d-3727-433a-84ba-f93e365bfd7e
+rbd_max_clone_depth = 5
+rbd_store_chunk_size = 4
+rados_connect_timeout = -1
+glance_api_version = 2
+[root@linux-node2 ~]# systemctl restart openstack-cinder-volume.service
+[root@linux-node1 ~]# cinder service-list 
+
+[root@linux-node1 ~]# cinder type-create ceph
++--------------------------------------+------+-------------+-----------+
+| ID                                   | Name | Description | Is_Public |
++--------------------------------------+------+-------------+-----------+
+| d648ea36-eae8-4eda-9ddd-7c2b8b345d7e | ceph | -           | True      |
++--------------------------------------+------+-------------+-----------+
+[root@linux-node1 ~]# cinder type-key ceph set volume_backend_name=ceph
+[root@linux-node1 ~]# cinder extra-specs-list
++--------------------------------------+------+---------------------------------+
+| ID                                   | Name | extra_specs                     |
++--------------------------------------+------+---------------------------------+
+| d648ea36-eae8-4eda-9ddd-7c2b8b345d7e | ceph | {'volume_backend_name': 'ceph'} |
++--------------------------------------+------+---------------------------------+
+
+[root@linux-node1 ~]# cinder create --volume-type ceph --name ceph-volumel 2
+[root@linux-node1 ~]# cinder list
+[root@linux-node1 ~]# rbd ls volumes 
+
+ceph块设备的创建和挂载
+[root@linux-node1 ~]# rbd create -p volumes --size 2048 rbd_test --image-format 2 --image-feature layering
+[root@linux-node1 ~]# rbd ls list -p volumes
+rbd_test
+[root@linux-node1 ~]# rbd du -p volumes
+NAME     PROVISIONED USED 
+rbd_test       2048M    0
+[root@linux-node1 ~]# rbd info -p volumes rbd_test
+rbd image 'rbd_test':
+        size 2048 MB in 512 objects
+        order 22 (4096 kB objects)
+        block_name_prefix: rbd_data.78ec46b8b4567
+        format: 2
+        features: layering
+        flags: 
+        create_timestamp: Sat Aug 18 18:41:11 2018
+
+[root@linux-node1 ~]# rbd map volumes/rbd_test
+/dev/rbd0
+
+[root@linux-node1 ~]# rbd showmapped
+id pool    image    snap device    
+0  volumes rbd_test -    /dev/rbd0
+
+[root@linux-node1 ~]# mkfs.xfs /dev/rbd0 
+meta-data=/dev/rbd0              isize=512    agcount=8, agsize=65536 blks
+         =                       sectsz=512   attr=2, projid32bit=1
+         =                       crc=1        finobt=0, sparse=0
+data     =                       bsize=4096   blocks=524288, imaxpct=25
+         =                       sunit=1024   swidth=1024 blks
+naming   =version 2              bsize=4096   ascii-ci=0 ftype=1
+log      =internal log           bsize=4096   blocks=2560, version=2
+         =                       sectsz=512   sunit=8 blks, lazy-count=1
+realtime =none                   extsz=4096   blocks=0, rtextents=
+
+[root@linux-node1 ~]# mkdir -p /data/rbd_test
+[root@linux-node1 ~]# mount /dev/rbd0 /data/rbd_test
+[root@linux-node1 ~]# mount | grep /dev/rbd0
+/dev/rbd0 on /data/rbd_test type xfs (rw,relatime,attr2,inode64,sunit=8192,swidth=8192,noquota)
+
+3)Ceph集成Nova
+1:在计算节点/etc/ceph/ceph.conf配置文件中的（client）配置段添加如下内容：
+[root@linux-node2 ~]# vi /etc/ceph/ceph.conf
+[global]
+fsid = 5496b323-10ad-419e-b336-3392ec196eb0
+mon_initial_members = linux-node1, linux-node2, linux-node3
+mon_host = 192.168.100.151,192.168.100.152,192.168.100.153
+auth_cluster_required = cephx
+auth_service_required = cephx
+auth_client_required = cephx
+osd pool default size = 2
+mon clock drift allowed = 2
+mon clock drift warn backoff = 30
+mon_max_pg_per_osd = 300
+[mon]
+mon allow pool delete = true
+[client]
+rbd cache = true
+rbd cache writethrough until flush = true
+admin socket = /var/run/ceph/guests/$cluster-$type.$id.$pid.$cctid.asok
+log file = /var/log/qemu/qemu-guest-$pid.log   
+rbd concurrent management ops = 20
+
+
+
+2:在创建ceph配置文件中指定路径并设置文件权限，用户qemu和组libvirtd根据Linux发行版本的不同而不同。 如果不确定，则直接按照如下方式设置：
+[root@linux-node2 ~]# mkdir -p /var/run/ceph/guests/ /var/log/qemu/ 
+[root@linux-node2 ~]# chown qemu:libvirt /var/run/ceph/guests /var/log/qemu/
+
+3:在/etc/nova/nova.conf的配置文件中［libvirt］配置段添加如下内容：
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/nova/nova.conf
+... ...
+[libvirt]
+virt_type = kvm
+images_type = rbd 
+images_rbd_pool = vms 
+images_rbd_ceph_conf = /etc/ceph/ceph.conf 
+rbd_user = cinder
+rbd_secret_uuid = 3e67ff66-0070-4d44-827e-e869057a7ce9  
+disk_cachemodes ="network=writeback" 
+in]ect_password = false 
+inject_key = false 
+inject_partition = -2 
+live_migration_flag ="VIR_MIGRATE_UNDEFINE_SOURCE,VIR_MIGRATE_PEER2PEER,VIR_MIGRATE_LIVE,VIR_MIGRATE_PERSIST_DEST,VIR_MIGRATE_TUNNELLED" 
+hw_disk_discard = unmap 
+
+4）全部计算节点配置完成后，重启每个计算节点的nova-compute服务
+[root@computer1 ~]#systemctl restart openstack-nova-compute.service
+[root@controllerl ~]# nova service-list
+
+5)Ceph集成OpenStack验证
+[root@linux-node1 ~]# rbd ls images
+d7ae5dcf-2b69-4842-ad4a-c36d51d1c4fc
+1:建基于Ceph存储后端的Bootable存储卷。
+[root@linux-node1 ~]# cinder create --image-id d7ae5dcf-2b69-4842-ad4a-c36d51d1c4fc --name ceph-bootablel --volume-type ceph 2
++--------------------------------+--------------------------------------+
+| Property                       | Value                                |
++--------------------------------+--------------------------------------+
+| attachments                    | []                                   |
+| availability_zone              | nova                                 |
+| bootable                       | false                                |
+| consistencygroup_id            | None                                 |
+| created_at                     | 2018-08-19T02:50:54.000000           |
+| description                    | None                                 |
+| encrypted                      | False                                |
+| id                             | 7da3d50e-9497-47b2-b75b-1b0ca637d357 |
+| metadata                       | {}                                   |
+| migration_status               | None                                 |
+| multiattach                    | False                                |
+| name                           | ceph-bootablel                       |
+| os-vol-host-attr:host          | None                                 |
+| os-vol-mig-status-attr:migstat | None                                 |
+| os-vol-mig-status-attr:name_id | None                                 |
+| os-vol-tenant-attr:tenant_id   | 71abd209193a4959a03afaf93165c6b3     |
+| replication_status             | None                                 |
+| size                           | 2                                    |
+| snapshot_id                    | None                                 |
+| source_volid                   | None                                 |
+| status                         | creating                             |
+| updated_at                     | 2018-08-19T02:50:54.000000           |
+| user_id                        | 963d8d9c790549f49d468982dc76504f     |
+| volume_type                    | ceph                                 |
++--------------------------------+--------------------------------------+
+[root@linux-node1 ~]# cinder list
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+| ID                                   | Status    | Name           | Size | Volume Type | Bootable | Attached to |
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+| 7da3d50e-9497-47b2-b75b-1b0ca637d357 | available | ceph-bootablel | 2    | ceph        | true     |             |
++--------------------------------------+-----------+----------------+------+-------------+----------+-------------+
+[root@linux-node1 ~]# openstack image list
++--------------------------------------+----------------+--------+
+| ID                                   | Name           | Status |
++--------------------------------------+----------------+--------+
+| d7ae5dcf-2b69-4842-ad4a-c36d51d1c4fc | cirros-on-ceph | active |
++--------------------------------------+----------------+--------+
+[root@linux-node1 ~]# openstack flavor list
++----+---------+-----+------+-----------+-------+-----------+
+| ID | Name    | RAM | Disk | Ephemeral | VCPUs | Is Public |
++----+---------+-----+------+-----------+-------+-----------+
+| 0  | m1.nano |  64 |    1 |         0 |     1 | True      |
++----+---------+-----+------+-----------+-------+-----------+
+[root@linux-node1 ~]# openstack network list
++--------------------------------------+----------+--------------------------------------+
+| ID                                   | Name     | Subnets                              |
++--------------------------------------+----------+--------------------------------------+
+| 78788de1-59c9-45ed-a9e8-acdc4468251e | provider | 9ae333fd-8ee0-43f4-8816-1e5e4a0bc771 |
++--------------------------------------+----------+--------------------------------------+
+
+[root@linux-node1 ~]# openstack security group list
++--------------------------------------+---------+------------------------+----------------------------------+
+| ID                                   | Name    | Description            | Project                          |
++--------------------------------------+---------+------------------------+----------------------------------+
+| 229825ae-f908-43df-b9ab-bae0c00ecdcb | default | Default security group | f89b984da28c42b192bd7d5f8d2c28ec |
+| 601303e7-75cf-480b-b2f8-39ac5d5c0ba9 | default | Default security group | 71abd209193a4959a03afaf93165c6b3 |
+| a309577c-98b9-4d46-9f89-f9aeb1a5fd4e | default | Default security group | 780a1c0a67314e9d9b295a9c6a6c6791 |
++--------------------------------------+---------+------------------------+----------------------------------+
+
+本例使用的cirros-0.3.4-x86_64-disk.img镜像井非RAW格式，因此需要进行如下转换
+[root@linux-node1 ~]# qemu-img convert -f qcow2 -O raw cirros-0.3.4-x86_64-disk.img cirros-0.3.4-x86_64-disk.raw
+[root@linux-node1 ~]# ls -l | grep *.raw
+-rw-r--r--  1 root root 41126400 Aug 19 11:31 cirros-0.3.4-x86_64-disk.raw
+
+#重新进行镜像创建
+[root@linux-node1 ~]# glance image-create --file cirros-0.3.4-x86_64-disk.raw --disk-format raw --name "cirros-raw-ceph" --container-format bare --visibility public --progress
+[=============================>] 100%
++------------------+----------------------------------------------------------------------------------+
+| Property         | Value                                                                            |
++------------------+----------------------------------------------------------------------------------+
+| checksum         | 56730d3091a764d5f8b38feeef0bfcef                                                 |
+| container_format | bare                                                                             |
+| created_at       | 2018-08-19T03:37:39Z                                                             |
+| direct_url       | rbd://5496b323-10ad-419e-b336-3392ec196eb0/images/887e35e5-bbee-4d27-8ddf-       |
+|                  | 8b6888600eb4/snap                                                                |
+| disk_format      | raw                                                                              |
+| id               | 887e35e5-bbee-4d27-8ddf-8b6888600eb4                                             |
+| min_disk         | 0                                                                                |
+| min_ram          | 0                                                                                |
+| name             | cirros-raw-ceph                                                                  |
+| owner            | 71abd209193a4959a03afaf93165c6b3                                                 |
+| protected        | False                                                                            |
+| size             | 41126400                                                                         |
+| status           | active                                                                           |
+| tags             | []                                                                               |
+| updated_at       | 2018-08-19T03:37:45Z                                                             |
+| virtual_size     | None                                                                             |
+| visibility       | public                                                                           |
++------------------+----------------------------------------------------------------------------------+
+
+[root@linux-node1 ~]# openstack image list
++--------------------------------------+-----------------+--------+
+| ID                                   | Name            | Status |
++--------------------------------------+-----------------+--------+
+| d7ae5dcf-2b69-4842-ad4a-c36d51d1c4fc | cirros-on-ceph  | active |
+| 887e35e5-bbee-4d27-8ddf-8b6888600eb4 | cirros-raw-ceph | active |
++--------------------------------------+-----------------+--------+
+
+#使用新镜像创建新的Bootable卷ceph-bootable2:
+[root@linux-node1 ~]# cinder create --image-id 887e35e5-bbee-4d27-8ddf-8b6888600eb4 --name ceph-bootable2 --volume-type ceph 2 
++--------------------------------+--------------------------------------+
+| Property                       | Value                                |
++--------------------------------+--------------------------------------+
+| attachments                    | []                                   |
+| availability_zone              | nova                                 |
+| bootable                       | false                                |
+| consistencygroup_id            | None                                 |
+| created_at                     | 2018-08-19T03:40:07.000000           |
+| description                    | None                                 |
+| encrypted                      | False                                |
+| id                             | 870f2388-8867-4a17-bddb-f349977dbcb3 |
+| metadata                       | {}                                   |
+| migration_status               | None                                 |
+| multiattach                    | False                                |
+| name                           | ceph-bootable2                       |
+| os-vol-host-attr:host          | None                                 |
+| os-vol-mig-status-attr:migstat | None                                 |
+| os-vol-mig-status-attr:name_id | None                                 |
+| os-vol-tenant-attr:tenant_id   | 71abd209193a4959a03afaf93165c6b3     |
+| replication_status             | None                                 |
+| size                           | 2                                    |
+| snapshot_id                    | None                                 |
+| source_volid                   | None                                 |
+| status                         | creating                             |
+| updated_at                     | 2018-08-19T03:40:07.000000           |
+| user_id                        | 963d8d9c790549f49d468982dc76504f     |
+| volume_type                    | ceph                                 |
++--------------------------------+--------------------------------------+
+到管理主界面用raw的镜像创建一个新的虚拟主机
+[root@controller1 ~]# rbd ls vms
+2355ff5f-ce32-469e-9fe5-c2c6525e29a0_disk
+
+
+
+故障1
+[root@linux-node2 ~]# tail -f /var/log/cinder/volume.log 
+2018-08-18 17:03:14.689 1464192 ERROR oslo_service.service   File "rbd.pyx", line 848, in rbd.RBD.list (/home/jenkins-build/build/workspace/ceph-build/ARCH/x86_64/AVAILABLE_ARCH/x86_64/AVAILABLE_DIST/centos7/DIST/centos7/MACHINE_SIZE/huge/release/12.2.7/rpm/el7/BUILD/ceph-12.2.7/build/src/pybind/rbd/pyrex/rbd.c:6034)
+2018-08-18 17:03:14.689 1464192 ERROR oslo_service.service PermissionError: [errno 1] error listing images
+解决办法
+1：检查client.cinder权限设置
+[ceph@linux-node1 my-cluster]$ ceph auth get-or-create client.glance mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool=images'
+[client.glance]
+        key = AQAJMnZbsVOQKhAAdye71hLRfWU2olDxvhNFMg==
+
+故障2
+[root@linux-node1 ~]# rbd map volumes/rbd_test
+rbd: sysfs write failed
+RBD image feature set mismatch. You can disable features unsupported by the kernel with "rbd feature disable volumes/rbd_test object-map fast-diff deep-flatten".
+In some cases useful info is found in syslog - try "dmesg | tail".
+rbd: map failed: (6) No such device or address
+解决办法
+[root@linux-node1 ~]# rbd create -p volumes --size 2048 rbd_test --image-format 2 --image-feature layering
+
+故障3：
+2018-08-13 11:43:57.678 4282 INFO cinder.message.api [req-a2432adf-5d67-444a-b3fd-ab085c3c8277 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Creating message record for request_id = req-a2432adf-5d67-444a-b3fd-ab085c3c8277
+2018-08-13 11:43:57.715 4282 ERROR cinder.scheduler.flows.create_volume [req-a2432adf-5d67-444a-b3fd-ab085c3c8277 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Failed to run task cinder.scheduler.flows.create_volume.ScheduleCreateVolumeTask;volume:create: No valid backend was found. No weighed backends available: NoValidBackend: No valid backend was found. No weighed backends available
+解决办法：
+1：检查/etc/cinder/cinder.conf中，driver-volume的配置是否正确，或者是否支持该卷驱动
+2：检查磁盘是否够用
+
+2018-08-18 18:50:43.132 41943 INFO cinder.message.api [req-2501a7ab-dbbf-4a85-b1fe-756bfdc31021 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Creating message record for request_id = req-2501a7ab-dbbf-4a85-b1fe-756bfdc31021
+2018-08-18 18:50:43.149 41943 ERROR cinder.scheduler.flows.create_volume [req-2501a7ab-dbbf-4a85-b1fe-756bfdc31021 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Failed to run task cinder.scheduler.flows.create_volume.ScheduleCreateVolumeTask;volume:create: No valid backend was found. No weighed backends available: NoValidBackend: No valid backend was found. No weighed backends available
+
+1：检查/etc/cinder/cinder.conf中，driver-volume的配置是否正确，或者是否支持该卷驱动
+2：检查磁盘是否够用
+3：反复多使着创建几次卷
+
+故障4：
+在配置管理界面创建虚拟云主机时，出现如下错误
+错误： 实例 "host" 执行所请求操作失败，实例处于错误状态。: 请稍后再试 [错误: Exceeded maximum number of retries. Exhausted all hosts available for retrying build failures for instance a2ef83d9-d4dc-44cb-ab65-59fecdfdefa1.]
+
+2018-08-19 11:49:09.085 929 ERROR nova.scheduler.utils [req-316dc3da-aef0-45ae-8846-fee86e9aa9a7 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - default default] [instance: 78bb6bad-1ef5-44bb-a892-9fdc8bf45e63] Error from last host: linux-node2 (node linux-node2): [u'Traceback (most recent call last):\n', u'  File "/usr/lib/python2.7/site-packages/nova/compute/manager.py", line 1840, in _do_build_and_run_instance\n    filter_properties, request_spec)\n', u'  File "/usr/lib/python2.7/site-packages/nova/compute/manager.py", line 2117, in _build_and_run_instance\n    instance_uuid=instance.uuid, reason=six.text_type(e))\n', u'RescheduledException: Build of instance 78bb6bad-1ef5-44bb-a892-9fdc8bf45e63 was re-scheduled: internal error: qemu unexpectedly closed the monitor: 2018-08-19T03:49:07.681051Z qemu-kvm: -drive file=rbd:vms/78bb6bad-1ef5-44bb-a892-9fdc8bf45e63_disk:id=cinder:auth_supported=cephx\\;none:mon_host=192.168.100.151\\:6789\\;192.168.100.152\\:6789\\;192.168.100.153\\:6789,file.password-secret=virtio-disk0-secret0,format=raw,if=none,id=drive-virtio-disk0,cache=writeback,discard=unmap: error connecting: Operation not permitted\n']
+
+LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin QEMU_AUDIO_DRV=none /usr/libexec/qemu-kvm -name guest=instance-00000023,debug-threads=on -S -object secret,id=masterKey0,format=raw,file=/var/lib/libvirt/qemu/domain-8-instance-00000023/master-key.aes -machine pc-i440fx-rhel7.5.0,accel=tcg,usb=off,dump-guest-core=off -cpu EPYC,acpi=on,ss=on,hypervisor=on,erms=on,mpx=on,pcommit=on,clwb=on,pku=on,ospke=on,3dnowext=on,3dnow=on,vme=off,fma=off,avx=off,f16c=off,rdrand=off,avx2=off,rdseed=off,sha-ni=off,xsavec=off,fxsr_opt=off,misalignsse=off,3dnowprefetch=off,osvw=off -m 64 -realtime mlock=off -smp 1,sockets=1,cores=1,threads=1 -uuid 7c2a0c1e-4f85-443f-9048-e0040f9334d4 -smbios 'type=1,manufacturer=RDO,product=OpenStack Compute,version=17.0.4-1.el7,serial=c7947084-e46b-43ac-93fb-545c185c86c3,uuid=7c2a0c1e-4f85-443f-9048-e0040f9334d4,family=Virtual Machine' -no-user-config -nodefaults -chardev socket,id=charmonitor,path=/var/lib/libvirt/qemu/domain-8-instance-00000023/monitor.sock,server,nowait -mon chardev=charmonitor,id=monitor,mode=control -rtc base=utc -no-shutdown -boot strict=on -device piix3-usb-uhci,id=usb,bus=pci.0,addr=0x1.0x2 -drive file=/var/lib/nova/instances/7c2a0c1e-4f85-443f-9048-e0040f9334d4/disk,format=qcow2,if=none,id=drive-virtio-disk0,cache=none -device virtio-blk-pci,scsi=off,bus=pci.0,addr=0x4,drive=drive-virtio-disk0,id=virtio-disk0,bootindex=1 -netdev tap,fd=26,id=hostnet0 -device virtio-net-pci,netdev=hostnet0,id=net0,mac=fa:16:3e:4f:c5:18,bus=pci.0,addr=0x3 -add-fd set=1,fd=29 -chardev pty,id=charserial0,logfile=/dev/fdset/1,logappend=on -device isa-serial,chardev=charserial0,id=serial0 -device usb-tablet,id=input0,bus=usb.0,port=1 -vnc 0.0.0.0:0 -k en-us -device cirrus-vga,id=video0,bus=pci.0,addr=0x2 -device virtio-balloon-pci,id=balloon0,bus=pci.0,addr=0x5 -msg timestamp=on
+2018-08-19T12:30:25.562832Z qemu-kvm: -chardev pty,id=charserial0,logfile=/dev/fdset/1,logappend=on: char device redirected to /dev/pts/0 (label charserial0)
+'serial' is deprecated, please use the corresponding option of '-device' instead error connecting: Operation not permitted
+解决办法：ceph版本与libvirtd版本不兼容，导致的错误。只能将opentack的版本换为Ocata，ceph版本华为r版本
+
+
+
+
+
+故障:
+#tail -f /var/log/cinder/volume.log 
+2018-08-20 19:43:51.694 4107 ERROR cinder.service [-] Manager for service cinder-volume cinder@glusterfs is reporting problems, not sending heartbeat. Service will appear "down".
+
+解决办法：
+glusterfs卷驱动已经被删除了,建议在M版上配置
+
+wget -r -e robots=off --wait 1 https://mirrors.tuna.tsinghua.edu.cn/centos/7/updates/ -P /centos7
+
+
+故障
+[ceph@controller1 ceph]$ ceph auth get-or-create client.cinder mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool=volumes, allow rwx pool=vms, allow rx pool=images'
+2018-08-24 18:21:09.787135 7f6df6899700 -1 auth: unable to find a keyring on /etc/ceph/ceph.client.admin.keyring,/etc/ceph/ceph.keyring,/etc/ceph/keyring,/etc/ceph/keyring.bin: (2) No such file or directory
+2018-08-24 18:21:09.787141 7f6df6899700 -1 monclient(hunting): ERROR: missing keyring, cannot use cephx for authentication
+2018-08-24 18:21:09.787142 7f6df6899700  0 librados: client.admin initialization error (2) No such file or directory
+Error connecting to cluster: ObjectNotFound
+解决办法
+[ceph@controller1 ceph]$ sudo ceph auth get-or-create client.cinder mon 'allow r' osd 'allow class-read object_prefix rbd_children, allow rwx pool=volumes, allow rwx pool=vms, allow rx pool=images'
+[client.cinder]
+        key = AQBZ3H9bnJ+KGBAAXCk16ThrDQQ0Y1wwryJ8CA==
