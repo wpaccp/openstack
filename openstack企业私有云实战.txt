@@ -1,0 +1,1817 @@
+                                    openstack企业私有云实战-Q版
+1.1 网络环境规划
+----------------------------------------------------------
+|主机名                    |ip地址           |服务器角色 |         
+----------------------------------------------------------
+|linux-node1.oldboyedu.com |192.168.100.151  |控制节点   |       
+----------------------------------------------------------
+|linux-node2.oldboyedu.com |192.168.100.152  |计算节点   |
+----------------------------------------------------------
+1.2 服务器配置说明
+控制节点:cpu单核，内存4G以上，硬盘50G
+计算节点:cpu双核2双线程，内存2G，硬盘50G,临时盘50G
+1.3 配置过程
+1.3.1 在控制节点和计算节点分别修改主机名，配置ntp时间同步，关闭防火墙，关闭selinux
+控制节点上的配置
+[root@linux-node1 ~]# hostname
+linux-node1
+[root@linux-node1 ~]# cat /etc/hostname
+linux-node1
+计算节点上的配置
+[root@linux-node1 ~]# cat /etc/hosts(控制节点和计算节点的配置是一样的)
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+192.168.100.151 linux-node1 linux-node1.oldboyedu.com 
+192.168.100.152 linux-node2 linux-node2.oldboyedu.com
+关闭防火墙和关闭selinux(控制节点和计算节点的配置一样)
+[root@linux-node1 ~]# getenforce
+Permissive
+[root@linux-node1 ~]# cat /etc/selinux/config
+
+# This file controls the state of SELinux on the system.
+# SELINUX= can take one of these three values:
+#     enforcing - SELinux security policy is enforced.
+#     permissive - SELinux prints warnings instead of enforcing.
+#     disabled - No SELinux policy is loaded.
+SELINUX=disabled
+# SELINUXTYPE= can take one of three two values:
+#     targeted - Targeted processes are protected,
+#     minimum - Modification of targeted policy. Only selected processes are protected. 
+#     mls - Multi Level Security protection.
+SELINUXTYPE=targeted
+
+[root@linux-node1 ~]# systemctl stop firewalld.service
+[root@linux-node1 ~]# systemctl status firewalld.service
+Unit firewalld.service could not be found.
+安装和配置ntp服务器，并同步系统时间(控制节点和计算节点的配置要一样)
+[root@linux-node1 ~]# yum install net-tools wget vim -y
+[root@linux-node1 ~]# yum install -y ntp
+[root@linux-node1 ~]# echo "ntpdate time1.aliyun.com" >> /etc/rc.d/rc.local
+[root@linux-node1 ~]# chmod +x /etc/rc.d/rc.local
+1.3.2 在控制节点上安装和mysql服务器和rabbitmq服务器
+1.3.2.1 mysql服务器安装和配置
+[root@linux-node1 ~]# rpm -ivh http://mirrors.aliyun.com/epel/epel-release-latest-7.noarch.rpm
+[root@linux-node1 ~]# yum install -y centos-release-openstack-queens
+[root@linux-node1 ~]# yum install -y python-openstackclient
+[root@linux-node1 ~]# yum install -y openstack-selinux
+[root@linux-node1 ~]# yum install -y mariadb mariadb-server python2-PyMySQL
+[root@linux-node1 ~]# cat /etc/my.cnf.d/openstack.cnf
+[mysqld]
+bind-address = 192.168.100.151 
+default-storage-engine = innodb  
+innodb_file_per_table = on
+collation-server = utf8_general_ci 
+character-set-server = utf8 
+max_connections = 4096 
+[root@linux-node1 ~]# systemctl enable mariadb.service
+[root@linux-node1 ~]# systemctl start mariadb.service
+[root@linux-node1 ~]# mysql_secure_installation
+1)回车 
+2)Set root password [Y/n] Y
+  New password:123456
+  Re-enter new passwor 123456
+3)Remove anonymous users? [Y/n] Y
+4)Disallow root login remotely? [Y/n] Y
+5)Remove test database and access to it? [Y/n] Y
+6)Reload privilege table now? [Y/n] Y
+[root@linux-node1 ~]# mysql -uroot -p123456
+Welcome to the MariaDB monitor.  Commands end with ; or \g.
+Your MariaDB connection id is 2925
+Server version: 10.1.20-MariaDB MariaDB Server
+
+Copyright (c) 2000, 2016, Oracle, MariaDB Corporation Ab and others.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+MariaDB [(none)]>
+或者:
+# echo -e "\nY\n123456\n123456\nY\nn\nY\nY\n" | mysql_secure_installation
+
+1.3.2.2 rabbitmq服务器的安装和配置
+[root@linux-node1 ~]# yum install -y rabbitmq-server
+[root@linux-node1 ~]# systemctl enable rabbitmq-server.service
+[root@linux-node1 ~]# systemctl start rabbitmq-server.service
+#添加openstack用户
+[root@linux-node1 ~]# rabbitmqctl add_user openstack openstack
+Creating user "openstack" ...
+#给刚才创建的openstack用户，创建权限
+[root@linux-node1 ~]# rabbitmqctl set_permissions openstack ".*" ".*" ".*"
+Setting permissions for user "openstack" in vhost "/" ...
+#启用Web监控插件
+[root@linux-node1 ~]# rabbitmq-plugins list
+[root@linux-node1 ~]# rabbitmq-plugins enable rabbitmq_management
+#客户端访问
+浏览器输入：http://192.168.100.151:15672 默认用户名密码：guest/guest
+
+1.3.3 keystone的配置
+1.3.3.1 keystone数据库的创建并设置访问权限
+[root@linux-node1 ~]# mysql -uroot -p123456
+MariaDB [(none)]> CREATE DATABASE keystone;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'keystone';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'keystone';
+MariaDB [(none)]> \q
+[root@linux-node1 ~]# yum install -y openstack-keystone httpd mod_wsgi memcached python-memcached
+[root@linux-node1 ~]# rpm -aq openstack-keystone httpd mod_wsgi memcached python-memcached
+mod_wsgi-3.4-12.el7_0.x86_64
+python-memcached-1.58-1.el7.noarch
+httpd-2.4.6-80.el7.centos.x86_64
+memcached-1.5.6-1.el7.x86_64
+openstack-keystone-13.0.0-1.el7.noarch
+[root@linux-node1 ~]# systemctl enable memcached.service
+[root@linux-node1 ~]# cat /etc/sysconfig/memcached
+PORT="11211"
+USER="memcached"
+MAXCONN="1024"
+CACHESIZE="64"
+OPTIONS="-l 192.168.100.151,::1"
+[root@linux-node1 ~]# systemctl start memcached.service
+#配置KeyStone数据库
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/keystone/keystone.conf
+1:[DEFAULT]
+450:[application_credential]
+477:[assignment]
+494:[auth]
+547:[cache]
+629:[catalog]
+664:[cors]
+693:[credential]
+719:[database]
+737:connection = mysql+pymysql://keystone:keystone@192.168.100.151/keystone
+825:[domain_config]
+848:[endpoint_filter]
+867:[endpoint_policy]
+879:[eventlet_server]
+930:[federation]
+977:[fernet_tokens]
+1016:[healthcheck]
+1044:[identity]
+1149:[identity_mapping]
+1187:[ldap]
+1476:[matchmaker_redis]
+1522:[memcache]
+1549:[oauth1]
+1575:[oslo_messaging_amqp]
+1781:[oslo_messaging_kafka]
+1839:[oslo_messaging_notifications]
+1866:[oslo_messaging_rabbit]
+2126:[oslo_messaging_zmq]
+2277:[oslo_middleware]
+2300:[oslo_policy]
+2347:[paste_deploy]
+2360:[policy]
+2377:[profiler]
+2475:[resource]
+2545:[revoke]
+2572:[role]
+2597:[saml]
+2691:[security_compliance]
+2778:[shadow_users]
+2793:[signing]
+2878:[token]
+2922:provider = fernet
+2977:[tokenless_auth]
+3008:[trust]
+3038:[unified_limit]
+#数据库同步
+[root@linux-node1 ~]# su -s /bin/sh -c "keystone-manage db_sync" keystone
+[root@linux-node1 ~]# mysql -h 192.168.56.11 -ukeystone -pkeystone -e " use keystone;show tables;"
+#初始化fernet keys
+[root@linux-node1 ~]# keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+[root@linux-node1 ~]# keystone-manage credential_setup --keystone-user keystone --keystone-group keystone
+#初始化keystone
+[root@linux-node1 ~]# keystone-manage bootstrap --bootstrap-password admin \
+ --bootstrap-admin-url http://192.168.100.151:35357/v3/ \
+ --bootstrap-internal-url http://192.168.100.151:35357/v3/ \
+ --bootstrap-public-url http://192.168.100.151:5000/v3/ \
+ --bootstrap-region-id RegionOne
+#启动keystone
+[root@linux-node1 ~]# grep "ServerName" /etc/httpd/conf/httpd.conf
+# ServerName gives the name and port that the server uses to identify itself.
+#ServerName www.example.com:80
+ServerName 192.168.100.151:80
+[root@linux-node1 ~]# ln -s /usr/share/keystone/wsgi-keystone.conf /etc/httpd/conf.d/
+[root@linux-node1 ~]# systemctl enable httpd.service
+[root@linux-node1 ~]# systemctl start httpd.service
+#设置环境变量
+[root@linux-node1 ~]# export OS_USERNAME=admin
+[root@linux-node1 ~]# export OS_PASSWORD=admin
+[root@linux-node1 ~]# export OS_PROJECT_NAME=admin
+[root@linux-node1 ~]# export OS_USER_DOMAIN_NAME=Default
+[root@linux-node1 ~]# export OS_PROJECT_DOMAIN_NAME=Default
+[root@linux-node1 ~]# export OS_AUTH_URL=http://192.168.56.11:35357/v3
+[root@linux-node1 ~]# export OS_IDENTITY_API_VERSION=3
+或者
+[root@linux-node1 ~]# cat OS.sh 
+export OS_USERNAME=admin
+export OS_PASSWORD=admin
+export OS_PROJECT_NAME=admin
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_AUTH_URL=http://192.168.100.151:35357/v3
+export OS_IDENTITY_API_VERSION=3
+#创建项目和demo用户
+[root@linux-node1 ~]# openstack project create --domain default --description "Demo Project" demo
+[root@linux-node1 ~]# openstack user create --domain default --password demo demo
+[root@linux-node1 ~]# openstack role create user
+[root@linux-node1 ~]# openstack role add --project demo --user demo user
+#创建Service项目
+[root@linux-node1 ~]# openstack project create --domain default --description "Service Project" service
+#创建glance用户
+[root@linux-node1 ~]# openstack user create --domain default --password glance glance
+[root@linux-node1 ~]# openstack role add --project service --user glance admin
+#创建nova用户
+[root@linux-node1 ~]# openstack user create --domain default --password nova nova
+[root@linux-node1 ~]# openstack role add --project service --user nova admin
+#创建placement用户
+[root@linux-node1 ~]# openstack user create --domain default --password placement placement
+[root@linux-node1 ~]# openstack role add --project service --user placement admin
+#创建Neutron用户
+[root@linux-node1 ~]# openstack user create --domain default --password neutron neutron
+[root@linux-node1 ~]# openstack role add --project service --user neutron admin
+#创建cinder用户
+[root@linux-node1 ~]# openstack user create --domain default --password cinder cinder
+[root@linux-node1 ~]# openstack role add --project service --user cinder admin
+#验证Keystone
+[root@linux-node1 ~]# unset OS_AUTH_URL OS_PASSWORD
+[root@linux-node1 ~]# openstack --os-auth-url http://192.168.56.11:35357/v3 \
+--os-project-domain-name default --os-user-domain-name default \
+--os-project-name admin --os-username admin token issue
+输入密码:admin
+[root@linux-node1 ~]# openstack --os-auth-url http://192.168.56.11:5000/v3 \
+--os-project-domain-name default --os-user-domain-name default \
+--os-project-name demo --os-username demo token issue
+输入密码:demo
+
+[root@linux-node1 ~]# cat admin-openstack.sh 
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=admin
+export OS_AUTH_URL=http://192.168.100.151:35357/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
+
+[root@linux-node1 ~]# cat /root/demo-openstack.sh
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_NAME=demo
+export OS_USERNAME=demo
+export OS_PASSWORD=demo
+export OS_AUTH_URL=http://192.168.100.151:5000/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# openstack token issue
+[root@linux-node1 ~]# source demo-openstack.sh
+[root@linux-node1 ~]# openstack token issue
+
+1.3.3.3 Glance的安装和配置
+[root@linux-node1 ~]# mysql -uroot -p123456
+MariaDB [(none)]> CREATE DATABASE glance;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY 'glance';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' IDENTIFIED BY 'glance';
+MariaDB [(none)]> \q
+#安装Glance
+[root@linux-node1 ~]# yum install -y openstack-glance
+#Glance数据库配置
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/glance/glance-api.conf
+1:[DEFAULT]
+1895:[cors]
+1924:[database]
+1942:connection = mysql+pymysql://glance:glance@192.168.100.151/glance
+2039:[glance_store]
+2066:stores = file,http
+2110:default_store = file
+2429:filesystem_store_datadir = /var/lib/glance/images
+3457:[image_format]
+3472:[keystone_authtoken]
+3501:auth_uri = http://192.168.100.151:5000
+3502:auth_url = http://192.168.100.151:35357
+3551:memcached_servers = 192.168.100.151:11211
+3658:auth_type = password
+3659:project_domain_name = default
+3660:user_domain_name = default
+3661:project_name = service
+3662:username = glance
+3663:password = glance
+3668:[matchmaker_redis]
+3714:[oslo_concurrency]
+3730:[oslo_messaging_amqp]
+3932:[oslo_messaging_kafka]
+3990:[oslo_messaging_notifications]
+4017:[oslo_messaging_rabbit]
+4274:[oslo_messaging_zmq]
+4424:[oslo_middleware]
+4435:[oslo_policy]
+4482:[paste_deploy]
+4507:flavor = keystone
+4542:[profiler]
+4637:[store_type_location_strategy]
+4675:[task]
+4738:[taskflow_executor]
+
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/glance/glance-registry.conf
+1:[DEFAULT]
+1170:[database]
+1285:[keystone_authtoken]
+1314:auth_uri = http://192.168.100.151:5000
+1315:auth_url = http://192.168.100.151:35357
+1364:memcached_servers = 192.168.100.151:11211
+1471:auth_type = password
+1472:project_domain_name = default
+1473:user_domain_name = default
+1474:project_name = service
+1475:username = glance
+1476:password = glance
+1481:[matchmaker_redis]
+1527:[oslo_messaging_amqp]
+1729:[oslo_messaging_kafka]
+1787:[oslo_messaging_notifications]
+1814:[oslo_messaging_rabbit]
+2071:[oslo_messaging_zmq]
+2221:[oslo_policy]
+2268:[paste_deploy]
+2293:flavor = keystone
+2328:[profiler]
+
+#同步数据库
+[root@linux-node1 ~]# su -s /bin/sh -c "glance-manage db_sync" glance
+#启动Glance服务
+[root@linux-node1 ~]# systemctl enable openstack-glance-api.service
+[root@linux-node1 ~]# systemctl enable openstack-glance-registry.service
+[root@linux-node1 ~]# systemctl start openstack-glance-api.service
+[root@linux-node1 ~]# systemctl start openstack-glance-registry.service
+
+#Glance服务注册
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# openstack service create --name glance --description "OpenStack Image service" image
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne   image public http://192.168.100.151:9292
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne   image internal http://192.168.100.151:9292
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne   image admin http://192.168.100.151:9292
+
+#测试Glance状态
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# openstack image list
+[root@linux-node1 ~]# cd /usr/local/src
+[root@linux-node1 src]# wget http://download.cirros-cloud.net/0.3.5/cirros-0.3.5-x86_64-disk.img
+[root@linux-node1 src]# openstack image create "cirros" --disk-format qcow2 \
+--container-format bare --file cirros-0.3.5-x86_64-disk.img --public
+[root@linux-node1 ~]# openstack image list
++--------------------------------------+--------+--------+
+| ID                                   | Name   | Status |
++--------------------------------------+--------+--------+
+| bff95334-cb71-459e-942c-45a82725bda0 | cirros | active |
+| a4921008-0912-4ef9-a0d6-020a42e39ddd | demo-n | active |
++--------------------------------------+--------+--------+
+
+1.3.3.4 Nova的安装和配置
+[root@linux-node1 ~]# mysql -uroot -p123456
+MariaDB [(none)]> CREATE DATABASE nova;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'localhost' IDENTIFIED BY 'nova';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'%' IDENTIFIED BY 'nova';
+MariaDB [(none)]> CREATE DATABASE nova_api;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'localhost' IDENTIFIED BY 'nova';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'%' IDENTIFIED BY 'nova';
+MariaDB [(none)]> CREATE DATABASE nova_cell0;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'localhost' IDENTIFIED BY 'nova';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'%' IDENTIFIED BY 'nova';
+MariaDB [(none)]> FLUSH PRIVILEGES
+MariaDB [(none)]> \q
+#控制节点安装
+[root@linux-node1 ~]# yum install -y openstack-nova-api openstack-nova-placement-api \
+  openstack-nova-conductor openstack-nova-console \
+  openstack-nova-novncproxy openstack-nova-scheduler
+#控制节点的配置
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]"  /etc/nova/nova.conf
+1:[DEFAULT]
+1755:use_neutron=true
+2417:firewall_driver=nova.virt.firewall.NoopFirewallDriver
+2756:enabled_apis=osapi_compute,metadata
+3156:transport_url = rabbit://openstack:openstack@192.168.100.151
+3204:[api]
+3222:auth_strategy=keystone
+3501:[api_database]
+3513:connection= mysql+pymysql://nova:nova@192.168.100.151/nova_api
+3559:[barbican]
+3588:[cache]
+3670:[cells]
+4188:[cinder]
+4189:os_region_name = RegionOne
+4351:[compute]
+4394:[conductor]
+4422:[console]
+4449:[consoleauth]
+4467:[cors]
+4496:[crypto]
+4570:[database]
+4588:connection= mysql+pymysql://nova:nova@192.168.100.151/nova
+4685:[devices]
+4705:[ephemeral_storage_encryption]
+4740:[filter_scheduler]
+5195:[glance]
+5217:api_servers = http://192.168.100.151:9292
+5352:[guestfs]
+5382:[healthcheck]
+5410:[hyperv]
+5730:[ironic]
+5867:[key_manager]
+5953:[keystone]
+5995:[keystone_authtoken]
+5997:auth_uri = http://192.168.100.151:5000
+5998:auth_url = http://192.168.100.151:35357
+5999:memcached_servers = 192.168.100.151:11211
+6000:auth_type = password
+6001:project_domain_name = default
+6002:user_domain_name = default
+6003:project_name = service
+6004:username = nova
+6005:password = nova
+6196:[libvirt]
+7253:[matchmaker_redis]
+7299:[metrics]
+7421:[mks]
+7456:[neutron]
+7457:url = http://192.168.100.151:9696
+7458:auth_url = http://192.168.100.151:35357
+7459:auth_type = password
+7460:project_domain_name = default
+7461:user_domain_name = default
+7462:region_name = RegionOne
+7463:project_name = service
+7464:username = neutron
+7465:password = neutron
+7466:service_metadata_proxy = True
+7467:metadata_proxy_shared_secret = unixhot.com
+7643:[notifications]
+7759:[osapi_v21]
+7784:[oslo_concurrency]
+7797:lock_path=/var/lib/nova/tmp
+7800:[oslo_messaging_amqp]
+8002:[oslo_messaging_kafka]
+8060:[oslo_messaging_notifications]
+8087:[oslo_messaging_rabbit]
+8344:[oslo_messaging_zmq]
+8494:[oslo_middleware]
+8517:[oslo_policy]
+8564:[pci]
+8678:[placement]
+8679:os_region_name = RegionOne
+8680:project_domain_name = Default
+8681:project_name = service
+8682:auth_type = password
+8683:user_domain_name = Default
+8684:auth_url = http://192.168.100.151:35357/v3
+8685:username = placement
+8686:password = placement
+8828:[quota]
+9124:[rdp]
+9189:[remote_debug]
+9238:[scheduler]
+9367:[serial_console]
+9458:[service_user]
+9568:[spice]
+9708:[upgrade_levels]
+9782:[vault]
+9802:[vendordata_dynamic_auth]
+9894:[vmware]
+10160:[vnc]
+10176:enabled=true
+10200:server_listen = 0.0.0.0
+10213:server_proxyclient_address = 192.168.100.151
+10387:[workarounds]
+10498:[wsgi]
+10669:[xenserver]
+11161:[xvp]
+#修改nova-placement-api.conf
+[root@linux-node1 ~]# cat /etc/httpd/conf.d/00-nova-placement-api.conf
+Listen 8778
+
+<VirtualHost *:8778>
+  WSGIProcessGroup nova-placement-api
+  WSGIApplicationGroup %{GLOBAL}
+  WSGIPassAuthorization On
+  WSGIDaemonProcess nova-placement-api processes=3 threads=1 user=nova group=nova
+  WSGIScriptAlias / /usr/bin/nova-placement-api
+  <Directory /usr/bin>
+   <IfVersion >= 2.4>
+      Require all granted
+   </IfVersion>
+   <IfVersion < 2.4>
+      Order allow,deny
+      Allow from all
+   </IfVersion>
+  </Directory>  
+  <IfVersion >= 2.4>
+    ErrorLogFormat "%M"
+  </IfVersion>
+  ErrorLog /var/log/nova/nova-placement-api.log
+  #SSLEngine On
+  #SSLCertificateFile ...
+  #SSLCertificateKeyFile ...
+</VirtualHost>
+
+
+Alias /nova-placement-api /usr/bin/nova-placement-api
+<Location /nova-placement-api>
+  SetHandler wsgi-script
+  Options +ExecCGI
+  WSGIProcessGroup nova-placement-api
+  WSGIApplicationGroup %{GLOBAL}
+  WSGIPassAuthorization On
+</Location>
+#同步数据库
+[root@linux-node1 ~]# su -s /bin/sh -c "nova-manage api_db sync" nova
+[root@linux-node1 ~]# su -s /bin/sh -c "nova-manage cell_v2 map_cell0" nova
+[root@linux-node1 ~]# su -s /bin/sh -c "nova-manage cell_v2 create_cell --name=cell1 --verbose" nova
+[root@linux-node1 ~]# su -s /bin/sh -c "nova-manage db sync" nova
+#验证cell0和cell1的注册是否正确
+[root@linux-node1 ~]# nova-manage cell_v2 list_cells
+#测试数据库同步情况
+[root@linux-node1 ~]# mysql -h 192.168.100.151 -unova -pnova -e " use nova;show tables;"
+[root@linux-node1 ~]# mysql -h 192.168.100.151 -unova -pnova -e " use nova_api;show tables;"
+#启动Nova Service
+[root@linux-node1 ~]# systemctl enable openstack-nova-api.service \
+openstack-nova-consoleauth.service \
+  openstack-nova-scheduler.service \
+openstack-nova-conductor.service \
+  openstack-nova-novncproxy.service
+[root@linux-node1 ~]# systemctl start openstack-nova-api.service \
+  openstack-nova-consoleauth.service \
+  openstack-nova-scheduler.service openstack-nova-conductor.service \
+  openstack-nova-novncproxy.service
+ #
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# openstack service create --name nova --description "OpenStack Compute" compute
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne compute public http://192.168.100.151:8774/v2.1
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne compute internal http://192.168.100.151:8774/v2.1
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne compute admin http://192.168.100.151:8774/v2.1
+
+[root@linux-node1 ~]# openstack service create --name placement --description "Placement API" placement
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne placement public http://192.168.100.151:8778
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne placement internal http://192.168.100.151:8778
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne placement admin http://192.168.100.151:8778
+#验证控制节点服务
+[root@linux-node1 ~]# openstack host list
+
+计算节点上的安装和配置
+[root@linux-node2 ~]# yum install -y openstack-nova-compute sysfsutils
+[root@linux-node1 ~]# scp /etc/nova/nova.conf 192.168.100.152:/etc/nova/nova.conf
+[root@linux-node2 ~]# chown root:nova /etc/nova/nova.conf
+[root@linux-node2 ~]# grep -nE "^[|^[a-z]" /etc/nova/nova.conf
+1:[DEFAULT]
+1755:use_neutron=true
+2417:firewall_driver=nova.virt.firewall.NoopFirewallDriver
+2756:enabled_apis=osapi_compute,metadata
+3156:transport_url = rabbit://openstack:openstack@192.168.100.151
+3204:[api]
+3222:auth_strategy=keystone
+3501:[api_database]
+3513:connection= mysql+pymysql://nova:nova@192.168.100.151/nova_api
+3559:[barbican]
+3588:[cache]
+3670:[cells]
+4188:[cinder]
+4351:[compute]
+4394:[conductor]
+4422:[console]
+4449:[consoleauth]
+4467:[cors]
+4496:[crypto]
+4570:[database]
+4588:connection= mysql+pymysql://nova:nova@192.168.100.151/nova
+4685:[devices]
+4705:[ephemeral_storage_encryption]
+4740:[filter_scheduler]
+5195:[glance]
+5217:api_servers = http://192.168.100.151:9292
+5352:[guestfs]
+5382:[healthcheck]
+5410:[hyperv]
+5730:[ironic]
+5867:[key_manager]
+5953:[keystone]
+5995:[keystone_authtoken]
+5997:auth_uri = http://192.168.100.151:5000
+5998:auth_url = http://192.168.100.151:35357
+5999:memcached_servers = 192.168.100.151:11211
+6000:auth_type = password
+6001:project_domain_name = default
+6002:user_domain_name = default
+6003:project_name = service
+6004:username = nova
+6005:password = nova
+6196:[libvirt]
+6299:virt_type=kvm
+7253:[matchmaker_redis]
+7299:[metrics]
+7421:[mks]
+7456:[neutron]
+7479:url = http://192.168.100.151:9696
+7480:auth_url = http://192.168.100.151:35357
+7481:auth_type = password
+7482:project_domain_name = default
+7483:user_domain_name = default
+7484:region_name = RegionOne
+7485:project_name = service
+7486:username = neutron
+7487:password = neutron
+7639:[notifications]
+7755:[osapi_v21]
+7780:[oslo_concurrency]
+7793:lock_path=/var/lib/nova/tmp
+7796:[oslo_messaging_amqp]
+7998:[oslo_messaging_kafka]
+8056:[oslo_messaging_notifications]
+8083:[oslo_messaging_rabbit]
+8340:[oslo_messaging_zmq]
+8490:[oslo_middleware]
+8513:[oslo_policy]
+8560:[pci]
+8674:[placement]
+8675:os_region_name = RegionOne
+8676:project_domain_name = Default
+8677:project_name = service
+8678:auth_type = password
+8679:user_domain_name = Default
+8680:auth_url = http://192.168.100.151:35357/v3
+8681:username = placement
+8682:password = placement
+8824:[quota]
+9120:[rdp]
+9185:[remote_debug]
+9234:[scheduler]
+9363:[serial_console]
+9454:[service_user]
+9564:[spice]
+9704:[upgrade_levels]
+9778:[vault]
+9798:[vendordata_dynamic_auth]
+9890:[vmware]
+10156:[vnc]
+10172:enabled=true
+10196:server_listen = 0.0.0.0
+10209:server_proxyclient_address = 192.168.100.152
+10227:novncproxy_base_url=http://192.168.100.151:6080/vnc_auto.html
+10383:[workarounds]
+10494:[wsgi]
+10665:[xenserver]
+11157:[xvp]
+# 启动nova-compute
+[root@linux-node2 ~]# systemctl enable libvirtd.service openstack-nova-compute.service
+[root@linux-node2 ~]# systemctl start libvirtd.service openstack-nova-compute.service
+# 验证计算节点
+[root@linux-node1 ~]# openstack host list
+计算节点加入控制节点
+[root@linux-node1 ~]# su -s /bin/sh -c "nova-manage cell_v2 discover_hosts --verbose" nova
+
+1.3.3.5 Neutron的安装和配置
+[root@linux-node1 ~]# mysql -uroot -p123456
+MariaDB [(none)]> CREATE DATABASE neutron;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'localhost' IDENTIFIED BY 'neutron';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'%' IDENTIFIED BY 'neutron';
+MariaDB [(none)]> \q
+# Neutron安装
+[root@linux-node1 ~]# yum install -y openstack-neutron openstack-neutron-ml2 \
+openstack-neutron-linuxbridge ebtables
+#修改/etc/neutron/neutron.conf文件内容如下
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/neutron/neutron.conf
+1:[DEFAULT]
+27:auth_strategy = keystone
+30:core_plugin = ml2
+33:service_plugins =
+98:notify_nova_on_port_status_changes = true
+102:notify_nova_on_port_data_changes = true
+570:transport_url = rabbit://openstack:openstack@192.168.100.151
+617:[agent]
+674:[cors]
+703:[database]
+729:connection = mysql+pymysql://neutron:neutron@192.168.100.151:3306/neutron
+817:[keystone_authtoken]
+818:auth_uri = http://192.168.100.151:5000
+819:auth_url = http://192.168.100.151:35357
+820:memcached_servers = 192.168.100.151:11211
+821:auth_type = password
+822:project_domain_name = default
+823:user_domain_name = default
+824:project_name = service
+825:username = neutron
+826:password = neutron
+1019:[matchmaker_redis]
+1065:[nova]
+1073:region_name = RegionOne
+1089:auth_url = http://192.168.100.151:35357
+1093:auth_type = password
+1131:project_domain_name = default
+1139:project_name = service
+1160:user_domain_name = default
+1167:username = nova
+1168:password = nova
+1170:[oslo_concurrency]
+1183:lock_path = $state_path/lock
+1186:[oslo_messaging_amqp]
+1392:[oslo_messaging_kafka]
+1450:[oslo_messaging_notifications]
+1477:[oslo_messaging_rabbit]
+1737:[oslo_messaging_zmq]
+1888:[oslo_middleware]
+1899:[oslo_policy]
+1946:[quotas]
+1997:[ssl]
+#Neutron ML2配置
+1:[DEFAULT]
+117:[l2pop]
+128:[ml2]
+136:type_drivers = local,flat,vlan,gre,vxlan,geneve
+141:tenant_network_types = flat,vlan,gre,vxlan,geneve
+145:mechanism_drivers = linuxbridge,openvswitch,l2population
+150:extension_drivers = port_security,qos
+177:[ml2_type_flat]
+186:flat_networks = provider
+189:[ml2_type_geneve]
+207:[ml2_type_gre]
+218:[ml2_type_vlan]
+231:[ml2_type_vxlan]
+247:[securitygroup]
+263:enable_ipset = true
+#Neutron Linuxbridge配置
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+1:[DEFAULT]
+117:[agent]
+146:[linux_bridge]
+157:physical_interface_mappings = provider:eth0
+163:[network_log]
+181:[securitygroup]
+188:firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+193:enable_security_group = true
+200:[vxlan]
+208:enable_vxlan = False
+#Neutron DHCP-Agent配置
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/neutron/dhcp_agent.ini
+1:[DEFAULT]
+16:interface_driver = linuxbridge
+28:dhcp_driver = neutron.agent.linux.dhcp.Dnsmasq
+37:enable_isolated_metadata = True
+208:[agent]
+230:[ovs]
+#Neutron metadata配置
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/neutron/metadata_agent.ini
+1:[DEFAULT]
+22:nova_metadata_host = 192.168.100.151
+34:metadata_proxy_shared_secret = unixhot.com
+187:[agent]
+202:[cache]
+#Neutron相关配置在nova.conf
+[root@linux-node1 ~]# grep -nE "^[|^[a-z]" /etc/nova/nova.conf
+7456:[neutron]
+7457:url = http://192.168.100.151:9696
+7458:auth_url = http://192.168.100.151:35357
+7459:auth_type = password
+7460:project_domain_name = default
+7461:user_domain_name = default
+7462:region_name = RegionOne
+7463:project_name = service
+7464:username = neutron
+7465:password = neutron
+7466:service_metadata_proxy = True
+7467:metadata_proxy_shared_secret = unixhot.com
+
+[root@linux-node1 ~]# ln -s /etc/neutron/plugins/ml2/ml2_conf.ini /etc/neutron/plugin.ini
+#同步数据库
+[root@linux-node1 ~]# su -s /bin/sh -c "neutron-db-manage --config-file /etc/neutron/neutron.conf \
+--config-file /etc/neutron/plugins/ml2/ml2_conf.ini upgrade head" neutron
+#重启计算API 服务
+[root@linux-node1 ~]# systemctl restart openstack-nova-api.service
+#启动网络服务并配置他们开机自启动。
+[root@linux-node1 ~]# systemctl enable neutron-server.service \
+  neutron-linuxbridge-agent.service neutron-dhcp-agent.service \
+  neutron-metadata-agent.service
+[root@linux-node1 ~]# systemctl start neutron-server.service \
+  neutron-linuxbridge-agent.service neutron-dhcp-agent.service \
+  neutron-metadata-agent.service
+#Neutron服务注册
+[root@linux-node1 ~]# openstack service create --name neutron --description "OpenStack Networking" network
+# 创建endpoint
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne network public http://192.168.100.151:9696
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne network internal http://192.168.100.151:9696
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne network admin http://192.168.100.151:9696
+#测试Neutron安装
+[root@linux-node1 ~]# openstack network agent list
+
+#Neutron计算节点部署
+#安装软件包
+[root@linux-node2 ~]# yum install -y openstack-neutron openstack-neutron-linuxbridge ebtables
+#Keystone连接配置
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/neutron/neutron.conf 
+[DEFAULT]
+auth_strategy = keystone
+[keystone_authtoken]
+auth_uri = http://192.168.100.151:5000
+auth_url = http://192.168.100.151:35357
+memcached_servers = 192.168.56.11:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutron
+#RabbitMQ相关设置
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/neutron/neutron.conf
+[DEFAULT]
+transport_url = rabbit://openstack:openstack@192.168.100.151
+#锁路径
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/neutron/neutron.conf
+[oslo_concurrency]
+lock_path = /var/lib/neutron/tmp
+#配置LinuxBridge配置
+[root@linux-node1 ~]# scp /etc/neutron/plugins/ml2/linuxbridge_agent.ini 192.168.100.152:/etc/neutron/plugins/ml2/
+#设置计算节点的nova.conf
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/nova/nova.conf
+[neutron]
+url = http://192.168.100.151:9696
+auth_url = http://192.168.100.151:35357
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+region_name = RegionOne
+project_name = service
+username = neutron
+password = neutron
+#重启计算服务
+[root@linux-node2 ~]# systemctl restart openstack-nova-compute.service
+#启动计算节点linuxbridge-agent
+[root@linux-node2 ~]# systemctl enable neutron-linuxbridge-agent.service
+[root@linux-node2 ~]# systemctl start neutron-linuxbridge-agent.service
+
+#在控制节点上测试Neutron安装
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# openstack network agent list
+
+#创建第一台云主机 
+#创建网络
+[root@linux-node1 ~]# openstack network create  --share --external \
+  --provider-physical-network provider \
+  --provider-network-type flat provider
+#创建子网
+[root@linux-node1 ~]# openstack subnet create --network provider \
+  --allocation-pool start=192.168.100.220,end=192.168.100.240 \
+  --dns-nameserver 114.114.114.114 --gateway 192.168.100.1 \
+  --subnet-range 192.168.100.0/24 provider-subnet
+#创建云主机类型
+openstack flavor create --id 0 --vcpus 1 --ram 64 --disk 1 m1.nano
+#创建密钥对
+[root@linux-node1 ~]# source demo-openstack.sh
+[root@linux-node1 ~]# ssh-keygen -q -N ""
+[root@linux-node1 ~]# openstack keypair create --public-key ~/.ssh/id_rsa.pub mykey
+[root@linux-node1 ~]# openstack keypair list
+#添加安全组规则
+[root@linux-node1 ~]# openstack security group rule create --proto icmp default
+[root@linux-node1 ~]# openstack security group rule create --proto tcp --dst-port 22 default
+#启动实例
+[root@linux-node1 ~]# source demo-openstack.sh
+[root@linux-node1 ~]# openstack flavor list
+#1.查看可用的镜像
+[root@linux-node1 ~]# openstack image list
+#2.查看可用的网络
+[root@linux-node1 ~]# openstack network list
+#3.查看可用的安全组
+[root@linux-node1 ~]# openstack security group list
+#4.创建虚拟机
+[root@linux-node1 ~]# openstack server create --flavor m1.nano --image cirros \
+--nic net-id=54d2570a-fd0e-4e12-9939-bb60d18e7448 demo-instance
+#注意指定网络的时候需要使用ID，而不是名称
+#这个ID号就是你使用openstack network list命令获取到的某个网络的ID号
+#5.查看虚拟机
+[root@linux-node1 ~]# openstack server list
+[root@linux-node1 ~]# openstack console url show demo-instance
+
+#dashboard的安装和配置
+1.安装Horizon[root@linux-node2 ~]# yum install -y openstack-dashboard
+ 2.Horizon配置[root@linux-node2 ~]# vim /etc/openstack-dashboard/local_settings
+OPENSTACK_HOST = "192.168.100.151"
+#允许所有主机访问
+ALLOWED_HOSTS = ['*', ]
+#设置API版本
+OPENSTACK_API_VERSIONS = {
+    "identity": 3,
+    "volume": 2,
+    "compute": 2,
+}
+开启多域支持
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+设置默认的域
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = 'Default'
+#设置Keystone地址
+OPENSTACK_HOST = "192.168.100.151"
+OPENSTACK_KEYSTONE_URL = "http://%s:5000/v3" % OPENSTACK_HOST
+#为通过仪表盘创建的用户配置默认的 user 角色
+OPENSTACK_KEYSTONE_DEFAULT_ROLE = "user"
+
+#设置Session存储到Memcached
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
+        'LOCATION': '192.168.100.151:11211',
+    }
+}
+#启用Web界面上修改密码
+OPENSTACK_HYPERVISOR_FEATURES = {
+    'can_set_mount_point': True,
+    'can_set_password': True,
+    'requires_keypair': False,
+}
+#设置时区
+TIME_ZONE = "Asia/Shanghai"
+#禁用自服务网络的一些高级特性
+OPENSTACK_NEUTRON_NETWORK = {
+    ...
+    'enable_router': False,
+    'enable_quotas': False,
+    'enable_distributed_router': False,
+    'enable_ha_router': False,
+    'enable_lb': False,
+    'enable_firewall': False,
+    'enable_vpn': False,
+    'enable_fip_topology_check': False,
+}
+3.启动服务
+[root@linux-node2 ~]# systemctl enable httpd.service
+[root@linux-node2 ~]# systemctl restart httpd.service
+
+#Cinder的配置
+#创建数据库，并设置数据库访问权限
+[root@linux-node1 ~]# mysql -uroot -p123456
+MariaDB [(none)]> CREATE DATABASE cinder;
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'localhost' IDENTIFIED BY 'cinder';
+MariaDB [(none)]> GRANT ALL PRIVILEGES ON cinder.* TO 'cinder'@'%' IDENTIFIED BY 'cinder';
+MariaDB [(none)]> \q
+#Cinder的安装
+[root@linux-node1 ~]# yum install -y openstack-cinder
+#
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf
+[database]
+connection = mysql+pymysql://cinder:cinder@192.168.100.151/cinder
+[root@linux-node1 ~]# su -s /bin/sh -c "cinder-manage db sync" cinder
+[root@linux-node1 ~]# grep "^[|^[a-z]"  /etc/cinder/cinder.conf
+[keystone_authtoken]
+auth_uri = http://192.168.100.151:5000
+auth_url = http://192.168.100.151:35357
+memcached_servers = 192.168.100.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = cinder
+password = cinder
+#RabbitMQ相关配置
+[root@linux-node1 ~]# grep "^[|^[a-z]"  /etc/cinder/cinder.conf
+[database]
+connection = mysql+pymysql://cinder:cinder@192.168.100.151/cinder
+#其它配置
+[root@linux-node1 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+[cinder]
+os_region_name = RegionOne
+#重启nova-api服务
+[root@linux-node1 ~]# systemctl restart openstack-nova-api.service
+#启动cinder服务，并设置为开机自动启动
+[root@linux-node1 ~]# systemctl enable openstack-cinder-api.service openstack-cinder-scheduler.service
+[root@linux-node1 ~]# systemctl start openstack-cinder-api.service openstack-cinder-scheduler.service
+#Cinder注册Service和Endpoint
+[root@linux-node1 ~]# openstack service create --name cinderv2 --description "OpenStack Block Storage" volumev2
+[root@linux-node1 ~]# openstack service create --name cinderv3 --description "OpenStack Block Storage" volumev3
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev2 public http://192.168.100.151:8776/v2/%\(project_id\)s
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev2 internal http://192.168.100.151:8776/v2/%\(project_id\)s
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev2 admin http://192.168.100.151:8776/v2/%\(project_id\)s
+
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev3 public http://192.168.100.151:8776/v3/%\(project_id\)s
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev3 internal http://192.168.100.151:8776/v3/%\(project_id\)s
+[root@linux-node1 ~]# openstack endpoint create --region RegionOne \
+  volumev3 admin http://192.168.100.151:8776/v3/%\(project_id\)s
+
+
+#存储节点配置
+[root@linux-node2 ~]# yum install -y lvm2 device-mapper-persistent-data
+#启动LVM的metadata服务并且设置该服务随系统启动：
+[root@linux-node2 ~]# systemctl enable lvm2-lvmetad.service
+[root@linux-node2 ~]# systemctl start lvm2-lvmetad.service
+#把/dev/sdb创建为LVM的物理卷：
+[root@linux-node2 ~]# pvcreate /dev/sdb
+  Physical volume "/dev/sdb" successfully created
+#创建名为cinder-volumes的逻辑卷组
+[root@linux-node2 ~]# vgcreate cinder-volumes /dev/sdb
+  Volume group "cinder-volumes" successfully created
+
+#在``devices``部分，添加一个过滤器，只接受``/dev/sdb``设备，拒绝其他所有设备
+[root@linux-node2 ~]# grep -nE "^{|filter" /etc/lvm/lvm.conf
+143:        filter = [ "a/sda/", "a/sdb/", "r/.*/"]
+
+#存储设备的安装
+#安装isci-target和cinder
+[root@linux-node2 ~]# yum install -y openstack-cinder targetcli python-keystone
+#同步控制节点配置文件
+由于存储节点大多数配置和控制节点相同，可以直接使用控制节点配置好的cinder.conf。再此基础上进行小的变动。
+[root@linux-node1 ~]# scp /etc/cinder/cinder.conf 192.168.100.152:/etc/cinder/
+#设置Cinder后端驱动
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf
+[lvm]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_group = cinder-volumes
+iscsi_protocol = iscsi
+iscsi_helper = lioadm
+volume_backend_name = iSCSI-Storage
+#在 [DEFAULT] 部分，启用 LVM 后端：
+[root@linux-node2 ~]# grep "^[|^[a-z]" /etc/cinder/cinder.conf
+[DEFAULT]
+enabled_backends = lvm
+glance_api_servers = http://192.168.100.151:9292
+#启动块存储卷服务及其依赖的服务，并将其配置为随系统启动：
+[root@linux-node2 ~]# systemctl enable openstack-cinder-volume.service target.service
+[root@linux-node2 ~]# systemctl start openstack-cinder-volume.service target.service
+
+命令行练习
+使用命令行创建cinder卷
+[root@linux-node1 ~]# openstack image list(查看当前的镜像)
++--------------------------------------+--------+--------+
+| ID                                   | Name   | Status |
++--------------------------------------+--------+--------+
+| bff95334-cb71-459e-942c-45a82725bda0 | cirros | active |
+| a4921008-0912-4ef9-a0d6-020a42e39ddd | demo-n | active |
++--------------------------------------+--------+--------+
+[root@linux-node1 ~]#  openstack availability zone list(查看当前的区域)
++-----------+-------------+
+| Zone Name | Zone Status |
++-----------+-------------+
+| internal  | available   |
+| nova      | available   |
+| nova      | available   |
+| nova      | available   |
++-----------+-------------+
+[root@linux-node1 ~]# openstack volume create --image bff95334-cb71-459e-942c-45a82725bda0 --size 2 --availability-zone nova volume1 (创建卷)
+[root@linux-node1 ~]# openstack volume list(查看卷)
++--------------------------------------+---------+-----------+------+--------------------------------+
+| ID                                   | Name    | Status    | Size | Attached to                    |
++--------------------------------------+---------+-----------+------+--------------------------------+
+| 82cff8a4-7c17-4d0d-a1ea-264ae740a535 | volume1 | available |    2 |                                |
+| be3d1dc7-36e4-466d-858d-593da8b56772 | j2      | in-use    |    2 | Attached to demo3 on /dev/vda  |
+| 199d7082-0dc2-4d19-8203-0c1965a161ad | j1      | in-use    |    3 | Attached to d3 on /dev/vda     |
+| aa514209-7df4-41b7-9b1e-106540bb346e | c1      | available |    5 |                                |
++--------------------------------------+---------+-----------+------+--------------------------------+
+
+故障解决：
+[root@linux-node1 cinder]# tail -f scheduler.log 
+2018-06-07 09:50:46.818 15865 INFO cinder.scheduler.base_filter [req-71855637-fb18-4e67-ae06-a7e2f4957373 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Filtering removed all hosts for the request with volume ID 'a6fee98b-72d2-453b-9663-70fc8d187041'. Filter results: AvailabilityZoneFilter: (start: 0, end: 0), CapacityFilter: (start: 0, end: 0), CapabilitiesFilter: (start: 0, end: 0)
+2018-06-07 09:50:46.819 15865 WARNING cinder.scheduler.filter_scheduler [req-71855637-fb18-4e67-ae06-a7e2f4957373 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] No weighed backend found for volume with properties: None
+2018-06-07 09:50:46.819 15865 INFO cinder.message.api [req-71855637-fb18-4e67-ae06-a7e2f4957373 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Creating message record for request_id = req-71855637-fb18-4e67-ae06-a7e2f4957373
+2018-06-07 09:50:46.871 15865 ERROR cinder.scheduler.flows.create_volume [req-71855637-fb18-4e67-ae06-a7e2f4957373 963d8d9c790549f49d468982dc76504f 71abd209193a4959a03afaf93165c6b3 - - -] Failed to run task cinder.scheduler.flows.create_volume.ScheduleCreateVolumeTask;volume:create: No valid backend was found. No weighed backends available: NoValidBackend: No valid backend was found. No weighed backends available
+解决思路：
+1)说明资源已经上限了，没有可创建卷的条件，
+2)调度器和cinder-volumn之间的传输消息出现的故障，导致调度器没有将调度信息成功的传递到cinder-volumn
+3)系统时间不同步
+解决办法:
+针对第一种情况，需要扩充资源
+针对第二种情况，要检查配置，检查网络，防火墙，
+针对第三种情况, 要同步系统时间
+
+用命令行挂载卷到指定的实例
+[root@linux-node1 ~]# openstack server add volume 01dc2156-9642-484e-b382-2f62be7ebf37 3b923712-3dae-4f39-941a-2ff61bda72b2 --device /dev/vdb
+01dc2156-9642-484e-b382-2f62be7ebf37:实例id
+3b923712-3dae-4f39-941a-2ff61bda72b2:卷id
+
+命令行给指定的卷增加容量
+openstack volume set e674f05d-b300-4ff0-a52f-05b3be80a7a0 --size 2
+
+删除指定的卷
+[root@linux-node1 ~]# openstack volume delete e674f05d-b300-4ff0-a52f-05b3be80a7a0
+
+
+转移卷
+[root@linux-node1 ~]# openstack volume transfer request create 3b923712-3dae-4f39-941a-2ff61bda72b2
+Invalid volume: status must be available (HTTP 400) (Request-ID: req-81d13b20-aaa8-43ed-ab58-e163597d9508)
+从以上的报错，可以看出只有可用的卷才可能被当做转移卷使用
+
+[root@linux-node1 ~]# openstack volume transfer request create 3b923712-3dae-4f39-941a-2ff61bda72b2
++------------+--------------------------------------+
+| Field      | Value                                |
++------------+--------------------------------------+
+| auth_key   | 654aac1006004c12                     |
+| created_at | 2018-06-07T09:55:35.212722           |
+| id         | e7d57df8-1995-4b58-ba63-77fa3a9393eb |
+| name       | None                                 |
+| volume_id  | 3b923712-3dae-4f39-941a-2ff61bda72b2 |
++------------+--------------------------------------+
+
+   
+//VLAN类型
+
+
+
+openstack security group rule create --proto icmp default
+openstack security group rule create --proto tcp --dst-port 22 default
+
+
+用到的调试命令
+neutron net-list
+neutron subnet-list
+openstack flavor list
+openstack keypair lit
+nova service-list
+neutron agent-list
+nova image-list
+openstack server list
+openstack console url provider-instance
+openstack endpoint list
+openstack role list
+
+http://cloud.centos.org/centos/7/images/
+
+                               阿里云ECS网络环境搭建
+在控制节点上的配置
+[root@linux-node1 ml2]# grep "^[a-z]" ml2_conf.ini
+type_drivers = local,flat,vlan,gre,vxlan,geneve
+tenant_network_types = flat,vlan,gre,vxlan,geneve
+mechanism_drivers = linuxbridge,openvswitch,l2population
+extension_drivers = port_security,qos
+flat_networks = provider,internet
+enable_ipset = true
+[root@linux-node1 ml2]# grep "^[a-z]" linuxbridge_agent.ini
+physical_interface_mappings = provider:eth0,internet:eth1
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+enable_security_group = true
+enable_vxlan = False
+[root@linux-node1 ml2]# systemctl restart neutron-linuxbridge-agent
+[root@linux-node1 ml2]# systemctl status neutron-linuxbridge-agent
+在计算节点上的配置
+[root@linux-node2 ~]# grep "^[a-z]" /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+physical_interface_mappings = provider:eth0,internet:eth1
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+enable_security_group = true
+enable_vxlan = False
+[root@linux-node2 ~]# systemctl restart neutron-linuxbridge_agent
+Failed to restart neutron-linuxbridge_agent.service: Unit not found.
+[root@linux-node2 ~]# systemctl restart neutron-linuxbridge-agent
+[root@linux-node2 ~]# systemctl status neutron-linuxbridge-agent
+● neutron-linuxbridge-agent.service - OpenStack Neutron Linux Bridge Agent
+   Loaded: loaded (/usr/lib/systemd/system/neutron-linuxbridge-agent.service; enabled; vendor preset: disabled)
+   Active: active (running) since Tue 2018-06-12 02:46:25 CST; 7s ago
+  Process: 18096 ExecStartPre=/usr/bin/neutron-enable-bridge-firewall.sh (code=exited, status=0/SUCCESS)
+ Main PID: 18102 (neutron-linuxbr)
+   CGroup: /system.slice/neutron-linuxbridge-agent.service
+           └─18102 /usr/bin/python2 /usr/bin/neutron-linuxbridge-agent --config-file /usr/sha...
+
+Jun 12 02:46:25 linux-node2 systemd[1]: Starting OpenStack Neutron Linux Bridge Agent...
+Jun 12 02:46:25 linux-node2 neutron-enable-bridge-firewall.sh[18096]: net.bridge.bridge-nf-ca...
+Jun 12 02:46:25 linux-node2 neutron-enable-bridge-firewall.sh[18096]: net.bridge.bridge-nf-ca...
+Jun 12 02:46:25 linux-node2 systemd[1]: Started OpenStack Neutron Linux Bridge Agent.
+Hint: Some lines were ellipsized, use -l to show in full.
+
+在控制节点上创建网络
+[root@linux-node1 ~]# systemctl restart neutron-server
+[root@linux-node1 ~]# systemctl status neutron-server
+â— neutron-server.service - OpenStack Neutron Server
+   Loaded: loaded (/usr/lib/systemd/system/neutron-server.service; enabled; vendor preset: disabled)
+   Active: active (running) since Tue 2018-06-12 03:06:35 CST; 6s ago
+ Main PID: 115995 (neutron-server)
+   CGroup: /system.slice/neutron-server.service
+           â”œâ”€115995 /usr/bin/python2 /usr/bin/neutron-server --config-file /usr/share/neutron...
+           â”œâ”€116016 /usr/bin/python2 /usr/bin/neutron-server --config-file /usr/share/neutron...
+           â”œâ”€116017 /usr/bin/python2 /usr/bin/neutron-server --config-file /usr/share/neutron...
+           â”œâ”€116018 /usr/bin/python2 /usr/bin/neutron-server --config-file /usr/share/neutron...
+           â””â”€116019 /usr/bin/python2 /usr/bin/neutron-server --config-file /usr/share/neutron...
+
+Jun 12 03:06:26 linux-node1 systemd[1]: Starting OpenStack Neutron Server...
+Jun 12 03:06:35 linux-node1 systemd[1]: Started OpenStack Neutron Server.
+[root@linux-node1 ~]# neutron net-create --shared --provider:physical_network internet --provider:network_type flat internet-net
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new network:
++---------------------------+--------------------------------------+
+| Field                     | Value                                |
++---------------------------+--------------------------------------+
+| admin_state_up            | True                                 |
+| availability_zone_hints   |                                      |
+| availability_zones        |                                      |
+| created_at                | 2018-06-11T19:07:19Z                 |
+| description               |                                      |
+| id                        | 517fdb37-b4ef-4880-8cf5-62b49ab2a341 |
+| ipv4_address_scope        |                                      |
+| ipv6_address_scope        |                                      |
+| mtu                       | 1500                                 |
+| name                      | internet-net                         |
+| port_security_enabled     | True                                 |
+| project_id                | 71abd209193a4959a03afaf93165c6b3     |
+| provider:network_type     | flat                                 |
+| provider:physical_network | internet                             |
+| provider:segmentation_id  |                                      |
+| revision_number           | 2                                    |
+| router:external           | False                                |
+| shared                    | True                                 |
+| status                    | ACTIVE                               |
+| subnets                   |                                      |
+| tags                      |                                      |
+| tenant_id                 | 71abd209193a4959a03afaf93165c6b3     |
+| updated_at                | 2018-06-11T19:07:19Z                 |
++---------------------------+--------------------------------------+
+创建子网
+[root@linux-node1 ~]# neutron subnet-create --name internet-subnet \
+> --allocation-pool start=192.168.101.220,end=192.168.101.240 \
+> --dns-nameserver 223.5.5.5 internet-net 192.168.101.0/24
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new subnet:
++-------------------+--------------------------------------------------------+
+| Field             | Value                                                  |
++-------------------+--------------------------------------------------------+
+| allocation_pools  | {"start": "192.168.101.220", "end": "192.168.101.240"} |
+| cidr              | 192.168.101.0/24                                       |
+| created_at        | 2018-06-12T02:25:04Z                                   |
+| description       |                                                        |
+| dns_nameservers   | 223.5.5.5                                              |
+| enable_dhcp       | True                                                   |
+| gateway_ip        | 192.168.101.1                                          |
+| host_routes       |                                                        |
+| id                | cdaafdfc-20a4-4f6b-88b2-285a2ca457c1                   |
+| ip_version        | 4                                                      |
+| ipv6_address_mode |                                                        |
+| ipv6_ra_mode      |                                                        |
+| name              | internet-subnet                                        |
+| network_id        | d3a82b1f-19ce-49a5-a992-9a82f4983d27                   |
+| project_id        | 71abd209193a4959a03afaf93165c6b3                       |
+| revision_number   | 0                                                      |
+| service_types     |                                                        |
+| subnetpool_id     |                                                        |
+| tags              |                                                        |
+| tenant_id         | 71abd209193a4959a03afaf93165c6b3                       |
+| updated_at        | 2018-06-12T02:25:04Z                                   |
++-------------------+--------------------------------------------------------+
+                         阿里云VPC网络环境搭建
+1.控制节点的配置
+1)修改/etc/neutron/neutron.conf的内容为:
+[root@linux-node1 ~]# grep "^[a-z]" /etc/neutron/neutron.conf
+auth_strategy = keystone
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+notify_nova_on_port_status_changes = true
+notify_nova_on_port_data_changes = true
+transport_url = rabbit://openstack:openstack@192.168.100.151
+connection = mysql+pymysql://neutron:neutron@192.168.100.151:3306/neutron
+auth_uri = http://192.168.100.151:5000
+auth_url = http://192.168.100.151:35357
+memcached_servers = 192.168.100.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutron
+region_name = RegionOne
+auth_url = http://192.168.100.151:35357
+auth_type = password
+project_domain_name = default
+project_name = service
+user_domain_name = default
+username = nova
+password = nova
+lock_path = $state_path/lock
+2)修改/etc/neutron/plugins/ml2/ml2_conf.ini的内容为:
+[root@linux-node1 ~]# grep "^[a-z]" /etc/neutron/plugins/ml2/ml2_conf.ini
+type_drivers = flat,vlan,gre,vxlan,geneve
+tenant_network_types = vxlan
+mechanism_drivers = linuxbridge,openvswitch,l2population
+extension_drivers = port_security,qos
+flat_networks = provider
+vni_ranges = 1:1000
+enable_ipset = true
+3)修改/etc/neutron/plugins/ml2/linuxbridge_agent.ini的内容为
+[root@linux-node1 ~]# grep "^[a-z]" /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+physical_interface_mappings = provider:eth0
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+enable_security_group = true
+enable_vxlan = True
+local_ip = 192.168.100.151
+l2_population = True
+配置 L3路由功能
+1)修改/etc/neutron/l3_agnet.ini的内容如下
+[root@linux-node1 neutron]# grep "^[a-z]" /etc/neutron/l3_agent.ini
+interface_driver = linuxbridge
+2)启动服务
+[root@linux-node1 neutron]# systemctl restart neutron-server
+[root@linux-node1 neutron]# systemctl restart neutron-linuxbridge-agent
+[root@linux-node1 neutron]# systemctl enable neutron-l3-agent
+Created symlink from /etc/systemd/system/multi-user.target.wants/neutron-l3-agent.service to /usr/lib/systemd/system/neutron-l3-agent.service.
+[root@linux-node1 neutron]# systemctl start neutron-l3-agent
+[root@linux-node1 neutron]# systemctl status neutron-l3-agent
+â— neutron-l3-agent.service - OpenStack Neutron Layer 3 Agent
+   Loaded: loaded (/usr/lib/systemd/system/neutron-l3-agent.service; enabled; vendor preset: disabled)
+   Active: active (running) since Tue 2018-06-12 15:02:27 CST; 5s ago
+ Main PID: 5864 (neutron-l3-agen)
+   CGroup: /system.slice/neutron-l3-agent.service
+           â”œâ”€5864 /usr/bin/python2 /usr/bin/neutron-l3-agent --config-file /usr/share/neutron...
+           â”œâ”€5882 sudo neutron-rootwrap /etc/neutron/rootwrap.conf privsep-helper --config-fi...
+           â””â”€5883 /usr/bin/python2 /usr/bin/neutron-rootwrap /etc/neutron/rootwrap.conf privs...
+
+Jun 12 15:02:27 linux-node1 systemd[1]: Started OpenStack Neutron Layer 3 Agent.
+Jun 12 15:02:27 linux-node1 systemd[1]: Starting OpenStack Neutron Layer 3 Agent...
+Jun 12 15:02:31 linux-node1 sudo[5882]:  neutron : TTY=unknown ; PWD=/ ; USER=root ; COMMAND=...
+Hint: Some lines were ellipsized, use -l to show in full.
+
+计算节点的配置
+1)修改/etc/neutron/plugins/ml2/linuxbridge_agent.ini的内容如下
+[root@linux-node2 ~]# grep "^[a-z]" /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+physical_interface_mappings = provider:eth0
+firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+enable_security_group = true
+enable_vxlan = True
+local_ip = 192.168.100.152
+l2_population = True
+2)重启服务
+[root@linux-node2 ~]# systemctl restart neutron-linuxbridge-agent
+[root@linux-node2 ~]# systemctl status neutron-linuxbridge-agent
+● neutron-linuxbridge-agent.service - OpenStack Neutron Linux Bridge Agent
+   Loaded: loaded (/usr/lib/systemd/system/neutron-linuxbridge-agent.service; enabled; vendor preset: disabled)
+   Active: active (running) since Tue 2018-06-12 15:52:10 CST; 1s ago
+  Process: 38930 ExecStartPre=/usr/bin/neutron-enable-bridge-firewall.sh (code=exited, status=0/SUCCESS)
+ Main PID: 38936 (neutron-linuxbr)
+   CGroup: /system.slice/neutron-linuxbridge-agent.service
+           └─38936 /usr/bin/python2 /usr/bin/neutron-linuxbridge-agent --config-file /usr/sha...
+
+Jun 12 15:52:10 linux-node2 systemd[1]: Starting OpenStack Neutron Linux Bridge Agent...
+Jun 12 15:52:10 linux-node2 neutron-enable-bridge-firewall.sh[38930]: net.bridge.bridge-nf-ca...
+Jun 12 15:52:10 linux-node2 neutron-enable-bridge-firewall.sh[38930]: net.bridge.bridge-nf-ca...
+Jun 12 15:52:10 linux-node2 systemd[1]: Started OpenStack Neutron Linux Bridge Agent.
+Hint: Some lines were ellipsized, use -l to show in full.
+3)控制节点验证配置
+[root@linux-node1 ~]# source admin-openstack.sh 
+[root@linux-node1 ~]# neutron agent-list
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
++--------------------------------------+--------------------+-------------+-------------------+-------+----------------+---------------------------+
+| id                                   | agent_type         | host        | availability_zone | alive | admin_state_up | binary                    |
++--------------------------------------+--------------------+-------------+-------------------+-------+----------------+---------------------------+
+| 2e1735a1-c6db-4d9a-b802-73ebd8c9d9d4 | Linux bridge agent | linux-node2 |                   | :-)   | True           | neutron-linuxbridge-agent |
+| 7dc24dfd-cccf-49c8-8563-8b12213c4c2c | Linux bridge agent | linux-node1 |                   | :-)   | True           | neutron-linuxbridge-agent |
+| 9c5bd723-02ad-4bd0-9f94-cf614ff51ac7 | DHCP agent         | linux-node1 | nova              | :-)   | True           | neutron-dhcp-agent        |
+| c1c45b5b-81af-44b8-a49f-1f25202924ba | Metadata agent     | linux-node1 |                   | :-)   | True           | neutron-metadata-agent    |
+| d2a613d9-d798-4a73-ab6d-808638ef1b76 | L3 agent           | linux-node1 | nova              | :-)   | True           | neutron-l3-agent          |
++--------------------------------------+--------------------+-------------+-------------------+-------+----------------+---------------------------+
+创建私有网络
+[root@linux-node1 ~]# source admin-openstack.sh
+[root@linux-node1 ~]# neutron net-create selfservice
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new network:
++---------------------------+--------------------------------------+
+| Field                     | Value                                |
++---------------------------+--------------------------------------+
+| admin_state_up            | True                                 |
+| availability_zone_hints   |                                      |
+| availability_zones        |                                      |
+| created_at                | 2018-06-12T09:42:49Z                 |
+| description               |                                      |
+| id                        | 96e649b6-4111-4c49-b96b-f1a027d84c0f |
+| ipv4_address_scope        |                                      |
+| ipv6_address_scope        |                                      |
+| is_default                | False                                |
+| mtu                       | 1450                                 |
+| name                      | selfservice                          |
+| port_security_enabled     | True                                 |
+| project_id                | 71abd209193a4959a03afaf93165c6b3     |
+| provider:network_type     | vxlan                                |
+| provider:physical_network |                                      |
+| provider:segmentation_id  | 12                                   |
+| revision_number           | 2                                    |
+| router:external           | False                                |
+| shared                    | False                                |
+| status                    | ACTIVE                               |
+| subnets                   |                                      |
+| tags                      |                                      |
+| tenant_id                 | 71abd209193a4959a03afaf93165c6b3     |
+| updated_at                | 2018-06-12T09:42:49Z                 |
++---------------------------+--------------------------------------+
+#创建一个子网
+[root@linux-node1 ~]# neutron subnet-create --name selfservice \
+> --dns-nameserver 114.114.114.114 --gateway 172.16.1.1 \
+> selfservice 172.16.1.0/24
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new subnet:
++-------------------+------------------------------------------------+
+| Field             | Value                                          |
++-------------------+------------------------------------------------+
+| allocation_pools  | {"start": "172.16.1.2", "end": "172.16.1.254"} |
+| cidr              | 172.16.1.0/24                                  |
+| created_at        | 2018-06-12T09:48:06Z                           |
+| description       |                                                |
+| dns_nameservers   | 114.114.114.114                                |
+| enable_dhcp       | True                                           |
+| gateway_ip        | 172.16.1.1                                     |
+| host_routes       |                                                |
+| id                | aa5d4709-2be9-4fbe-ab62-7f195b2e9bba           |
+| ip_version        | 4                                              |
+| ipv6_address_mode |                                                |
+| ipv6_ra_mode      |                                                |
+| name              | selfservice                                    |
+| network_id        | 96e649b6-4111-4c49-b96b-f1a027d84c0f           |
+| project_id        | 71abd209193a4959a03afaf93165c6b3               |
+| revision_number   | 0                                              |
+| service_types     |                                                |
+| subnetpool_id     |                                                |
+| tags              |                                                |
+| tenant_id         | 71abd209193a4959a03afaf93165c6b3               |
+| updated_at        | 2018-06-12T09:48:06Z                           |
++-------------------+------------------------------------------------+
+#创建路由
+[root@linux-node1 ~]# neutron net-update provider --router:external
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Updated network: provider
+
+[root@linux-node1 ~]# source demo-openstack.sh 
+[root@linux-node1 ~]# neutron router-create router
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new router:
++-------------------------+--------------------------------------+
+| Field                   | Value                                |
++-------------------------+--------------------------------------+
+| admin_state_up          | True                                 |
+| availability_zone_hints |                                      |
+| availability_zones      |                                      |
+| created_at              | 2018-06-12T09:56:26Z                 |
+| description             |                                      |
+| external_gateway_info   |                                      |
+| flavor_id               |                                      |
+| id                      | 25159ee2-c0d9-4e77-843a-3a20cf742a2d |
+| name                    | router                               |
+| project_id              | f89b984da28c42b192bd7d5f8d2c28ec     |
+| revision_number         | 1                                    |
+| routes                  |                                      |
+| status                  | ACTIVE                               |
+| tags                    |                                      |
+| tenant_id               | f89b984da28c42b192bd7d5f8d2c28ec     |
+| updated_at              | 2018-06-12T09:56:26Z                 |
++-------------------------+--------------------------------------+
+
+[root@linux-node1 ~]# source demo-openstack.sh 
+[root@linux-node1 ~]# neutron net-create selfservice
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new network:
++-------------------------+--------------------------------------+
+| Field                   | Value                                |
++-------------------------+--------------------------------------+
+| admin_state_up          | True                                 |
+| availability_zone_hints |                                      |
+| availability_zones      |                                      |
+| created_at              | 2018-06-12T10:01:35Z                 |
+| description             |                                      |
+| id                      | 0c1ab9c0-367a-42ad-948d-7946d22d018d |
+| ipv4_address_scope      |                                      |
+| ipv6_address_scope      |                                      |
+| is_default              | False                                |
+| mtu                     | 1450                                 |
+| name                    | selfservice                          |
+| port_security_enabled   | True                                 |
+| project_id              | f89b984da28c42b192bd7d5f8d2c28ec     |
+| revision_number         | 2                                    |
+| router:external         | False                                |
+| shared                  | False                                |
+| status                  | ACTIVE                               |
+| subnets                 |                                      |
+| tags                    |                                      |
+| tenant_id               | f89b984da28c42b192bd7d5f8d2c28ec     |
+| updated_at              | 2018-06-12T10:01:35Z                 |
++-------------------------+--------------------------------------+
+[root@linux-node1 ~]# neutron subnet-create --name selfservice --dns-nameserver 114.114.114.114 --gateway 172.16.1.1 selfservice 172.16.1.0/24
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Created a new subnet:
++-------------------+------------------------------------------------+
+| Field             | Value                                          |
++-------------------+------------------------------------------------+
+| allocation_pools  | {"start": "172.16.1.2", "end": "172.16.1.254"} |
+| cidr              | 172.16.1.0/24                                  |
+| created_at        | 2018-06-12T10:03:53Z                           |
+| description       |                                                |
+| dns_nameservers   | 114.114.114.114                                |
+| enable_dhcp       | True                                           |
+| gateway_ip        | 172.16.1.1                                     |
+| host_routes       |                                                |
+| id                | 697fb979-f485-40d3-8754-8344812ceb1d           |
+| ip_version        | 4                                              |
+| ipv6_address_mode |                                                |
+| ipv6_ra_mode      |                                                |
+| name              | selfservice                                    |
+| network_id        | 0c1ab9c0-367a-42ad-948d-7946d22d018d           |
+| project_id        | f89b984da28c42b192bd7d5f8d2c28ec               |
+| revision_number   | 0                                              |
+| service_types     |                                                |
+| subnetpool_id     |                                                |
+| tags              |                                                |
+| tenant_id         | f89b984da28c42b192bd7d5f8d2c28ec               |
+| updated_at        | 2018-06-12T10:03:53Z                           |
++-------------------+------------------------------------------------+
+[root@linux-node1 ~]# neutron router-interface-add router selfservice
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Added interface 6b3d2369-d27d-4ce1-9270-4c9fd5d91f22 to router router.
+[root@linux-node1 ~]# neutron router-gateway-set router provider
+neutron CLI is deprecated and will be removed in the future. Use openstack CLI instead.
+Set gateway for router router
+[root@linux-node1 ~]# ip netns
+qrouter-25159ee2-c0d9-4e77-843a-3a20cf742a2d (id: 3)
+qdhcp-0c1ab9c0-367a-42ad-948d-7946d22d018d (id: 2)
+qdhcp-96e649b6-4111-4c49-b96b-f1a027d84c0f (id: 1)
+qdhcp-2405cba1-a734-4bef-99e4-f6d19bc46b6b (id: 0)
+计算节点dashborad的配置
+[root@linux-node2 ~]# vim /etc/openstack-dashboard/local_settings修改配置如下
+... ...
+321 OPENSTACK_NEUTRON_NETWORK = {
+    322     'enable_router': True,
+    323     'enable_quotas': True,
+    324     'enable_ipv6': True,
+    325     'enable_distributed_router': True,
+    326     'enable_ha_router': True,
+    327     'enable_lb': True,
+    328     'enable_firewall': True,
+    329     'enable_vpn': False,
+    330     'enable_fip_topology_check': True,
+    
+[root@linux-node2 ~]# systemctl restart httpd
+
+
+# openstack flavor create m1.tiny --id 1 --ram 512 --disk 1 --vcpus 1
+# openstack flavor create m1.small --id 2 --ram 2048 --disk 20 --vcpus 1
+# openstack flavor create m1.medium --id 3 --ram 4096 --disk 40 --vcpus 2
+# openstack flavor create m1.large --id 4 --ram 8192 --disk 80 --vcpus 4
+# openstack flavor create m1.xlarge --id 5 --ram 16384 --disk 160 --vcpus 8
+# openstack flavor list
+                       
+                       openstack neutron OVS配置实战
+1.controller节点上的配置
+[root@linux-node1 ~]# vi sysctl.conf
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+net.bridge.bridge-nf-call-arptables=1
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+[root@linux-node1 ~]# sysctl -p
+1.1 修改/etc/neutron/neutron.conf文件内容，添加如下配置选项
+[root@linux-node1 ~]# grep "^[|^[a-Z]" /etc/neutron/neutron.conf
+[DEFAULT]
+auth_strategy = keystone
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+notify_nova_on_port_status_changes = true
+notify_nova_on_port_data_changes = true
+transport_url = rabbit://openstack:openstack@linux-node1
+[database]
+connection = mysql+pymysql://neutron:neutron@linux-node1:3306/neutron
+[keystone_authtoken]
+auth_uri = http://linux-node1:5000
+auth_url = http://linux-node1:35357
+memcached_servers = 10.1.1.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutron
+[nova]
+region_name = RegionOne
+auth_url = http://linux-node1:35357
+auth_type = password
+project_domain_name = default
+project_name = service
+user_domain_name = default
+username = nova
+password = nova
+[oslo_concurrency]
+lock_path = $state_path/lock
+
+1.2 修改/etc/neutron/plugins/ml2/ml2_conf.ini文件内容，添加如下配置选项
+[root@linux-node1 ~]# grep "^[|^[a-Z]" /etc/neutron/plugins/ml2/ml2_conf.ini
+[ml2]
+type_drivers = flat,vlan,vxlan
+tenant_network_types = vxlan
+mechanism_drivers = openvswitch,l2population
+[ml2_type_flat]
+flat_networks = provider
+[ml2_type_vxlan]
+vni_ranges = 1001:2000
+
+1.3 重启以下服务
+[root@linux-node1 ~]# systemctl restart neutron-server
+[root@linux-node1 ~]# systemctl restart neutron-openvswitch-agent
+
+[root@linux-node1 ~]# ovs-vsctl add-br br-ex
+[root@linux-node1 ~]# ovs-vsctl add-port br-ex eth0
+[root@linux-node1 ~]# ifconfig br-ex 192.168.100.151/24
+[root@linux-node1 ~]# ifconfig eth0 0.0.0.0
+
+1.4 修改/etc/neutron/plugins/ml2/openvswitch_agent.ini文件的内容，添加如下配置选项
+[root@linux-node1 ~]# grep "^[|^[a-Z]" /etc/neutron/plugins/ml2/openvswitch_agent.ini
+[agent]
+tunnel_types = vxlan
+l2_population = True
+[ovs]
+bridge_mappings = provider:br-ex 
+local_ip = 10.2.2.151
+[securitygroup]
+firewall_driver = iptables_hybrid
+
+1.5 修改/etc/neutron/l3_agent.ini文件的内容，添加如下配置选项
+[root@linux-node1 ~]# grep "^[|^[a-Z]" /etc/neutron/l3_agent.ini
+[DEFAULT]
+external_network_bridge = 
+interface_driver = openvswitch
+
+1.6 启动如下服务
+[root@linux-node1 ~]# systemctl restart neutron-openvswitch-agent
+[root@linux-node1 ~]# systemctl start neutron-l3-agent
+
+2.计算节点上的配置
+[root@linux-node2 ~]# vi /etc/sysctl.conf
+# System default settings live in /usr/lib/sysctl.d/00-system.conf.
+# To override those settings, enter new settings here, or in an /etc/sysctl.d/<name>.conf file
+#
+# For more information, see sysctl.conf(5) and sysctl.d(5).
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+net.bridge.bridge-nf-call-arptables=1
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+[root@linux-node2 ~]# sysctl -p
+2.1 /etc/neutorn/plugins/ml2/openvswitch_agent.ini文件中，启用VXLAN支持，包括第2层填充
+[root@linux-node2 ~]# grep "^[|^[a-Z]" /etc/neutron/plugins/ml2/openvswitch_agent.ini
+[agent]
+tunnel_types = vxlan
+l2_population = True
+[ovs]
+local_ip = 10.2.2.152
+
+2.2 重新启动以下服务
+[root@linux-node2 ~]# systemctl restart neutron-openvswitch-agent
+
+
+3.验证配置
+[root@linux-node1 ~]# source admin-openstack.sh 
+[root@linux-node1 ~]# openstack network agent list
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------+
+| ID                                   | Agent Type         | Host        | Availability Zone | Alive | State | Binary                    |
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------+
+| 43b792e9-3d94-4516-ba72-ffeb8c5c8ec7 | DHCP agent         | linux-node1 | nova              | :-)   | UP    | neutron-dhcp-agent        |
+| 80bd96e2-1f1d-40bc-9c13-53f923a5d993 | Open vSwitch agent | linux-node1 | None              | :-)   | UP    | neutron-openvswitch-agent |
+| 85d11462-36a1-4585-9fdc-8223916257ad | Metadata agent     | linux-node1 | None              | :-)   | UP    | neutron-metadata-agent    |
+| a69f9b7f-10a8-4808-9f67-fbea8cda01b5 | L3 agent           | linux-node1 | nova              | :-)   | UP    | neutron-l3-agent          |
+| d2c1b128-895d-4b7e-8a58-0dd9ba01c649 | Open vSwitch agent | linux-node2 | None              | :-)   | UP    | neutron-openvswitch-agent |
++--------------------------------------+--------------------+-------------+-------------------+-------+-------+---------------------------+
+[root@linux-node1 ~]# openstack server list
++--------------------------------------+------+--------+------------------------+--------+---------+
+| ID                                   | Name | Status | Networks               | Image  | Flavor  |
++--------------------------------------+------+--------+------------------------+--------+---------+
+| 58c7e972-dc93-46e4-8229-f0ba5b0ff8e7 | host | ACTIVE | private=172.16.100.225 | cirros | m1.tiny |
++--------------------------------------+------+--------+------------------------+--------+---------+
+
+                          openstack neutron OVS+DVR配置实战
+
+控制器节点
+[root@linux-node1 ~]# vi sysctl.conf
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+net.bridge.bridge-nf-call-arptables=1
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+[root@linux-node1 ~]# sysctl -p
+vim /etc/neutron/neutron.conf
+1:启用分布式路由
+[root@linux-node1 ~]# grep -nE "^[|^[a-Z]" /etc/neutron/neutron.conf
+1:[DEFAULT]
+auth_strategy = keystone
+core_plugin = ml2
+service_plugins = router
+allow_overlapping_ips = True
+notify_nova_on_port_status_changes = true
+notify_nova_on_port_data_changes = true
+router_distributed = True
+transport_url = rabbit://openstack:openstack@linux-node1
+[database]
+connection = mysql+pymysql://neutron:neutron@linux-node1:3306/neutron
+[keystone_authtoken]
+auth_uri = http://linux-node1:5000
+auth_url = http://linux-node1:35357
+memcached_servers = 10.1.1.151:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = neutron
+password = neutron
+[matchmaker_redis]
+[nova]
+region_name = RegionOne
+auth_url = http://linux-node1:35357
+auth_type = password
+project_domain_name = default
+project_name = service
+user_domain_name = default
+username = nova
+password = nova
+[oslo_concurrency]
+lock_path = $state_path/lock
+
+2:重启neutron服务
+systemctl restart neutron-server
+
+网络节点
+1:vim /etc/neutron/plugins/ml2/openswitch_agent.ini,启用分布式路由
+[root@linux-node1 ~]# vi /etc/neutron/plugins/ml2/openvswitch_agent.ini
+[DEFAULT]
+enable_distributed_routing = True
+
+[agent]
+tunnel_types = vxlan
+l2_population = True
+
+[ovs]
+bridge_mappings = provider:br-ex
+local_ip = 10.2.2.151
+
+[securitygroup]
+firewall_driver = iptables_hybrid
+
+2:vim /etc/neutron/l3_agent.ini文件中，配置第3层代理以提供SNAT服务。
+[root@linux-node1 ~]# vim /etc/neutron/l3_agent.ini
+[DEFAULT]
+external_network_bridge =
+interface_driver = openvswitch
+agent_mode = dvr_snat
+
+3:重新启动以下服务：
+[root@linux-node1 ~]# systemctl restart neutron-openvswitch-agent
+[root@linux-node1 ~]# systemctl restart neutron-l3-agent
+
+计算节点
+1:vim /etc/neutron/plugins/ml2/openswitch_agent.ini 启用分布式路由
+[root@linux-node2 ~]# vim /etc/neutron/plugins/ml2/openvswitch_agent.ini
+[DEFAULT]
+enable_distributed_routing = True
+
+[agent]
+tunnel_types = vxlan
+l2_population = True
+
+[ovs]
+local_ip = 10.2.2.152
+
+2:vim /etc/neutron/l3_agent.ini,配置第3层代理
+[root@linux-node2 ~]# vim /etc/neutron/l3_agent.ini 
+[DEFAULT]
+interface_driver = openvswitch
+external_network_bridge =
+agent_mode = dvr
+
+3:启动以下服务
+[root@linux-node2 ~]# systemctl restart neutron-openvswitch-agent
+[root@linux-node2 ~]# systemctl restart neutron-l3-agent
+
+
+#获取管理项目凭据。
+#source admin-openrc.sh
+#更新提供商网络以支持自助服务网络的外部连接
+openstack network set --external provider
+#创建自助服务网络
+# openstack network create selfservice2
+# 在自助服务网络上创建IPv4子网
+# openstack subnet create --subnet-range 192.0.2.0/24 --network selfservice2 --dns-nameserver 114.114.114.114 selfservice2-v4
+#创建路由器
+# openstack router create router2
+#将IPv4子网添加为路由器上的接口
+# openstack router add subnet router2 selfservice2-v4
+#将提供商网络添加为路由器上的网关
+# openstack router set router2 --external-gateway provider1
+#验证路由器上的分布式路由
+# openstack router show router2
+#在附加的自助服务网络上启动带有接口的实例。例如，使用风味ID 1的CirrOS图像
+# openstack server create --flavor 1 --image cirros --nic net-id=NETWORK_ID selfservice-instance2
+#确定实例的IPv4和IPv6地址
+# openstack server list
+#在提供商网络上创建浮动IPv4地址。
+# openstack floating ip create provider
+#将浮动IPv4地址与实例关联
+# openstack server add floating ip selfservice-instance2 203.0.113.17
+
+结论：
+https://docs.openstack.org/neutron/queens/configuration/neutron.html
+https://docs.openstack.org/nova/queens/configuration/config.html#cinder
+
+
+
+
+
+
+
+
+
+ 
